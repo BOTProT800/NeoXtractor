@@ -192,6 +192,7 @@ class MeshParser0(BaseMeshParser):
         bone_parent_read = read_uint8
         vert_float_read = read_float
         vert_bone_read = read_uint8
+        joint_index_bits = 8
         total_uv_data = 0
         meshes_inside = 1
         meshes_inside_data = 0
@@ -250,6 +251,12 @@ class MeshParser0(BaseMeshParser):
                 model["bones"]["parent_connections"].append(-1)
                 model["bones"]["names"].append("dummy_root")
                 model["bones"]["matrix"].append(np.identity(4))
+                # The synthetic root is a real bone from here on: everything
+                # downstream (validation, accessors, joint palettes) counts
+                # bones through this field, so it has to grow with the arrays.
+                model["bones"]["count"] = bone_count = len(
+                    model["bones"]["parent_connections"]
+                )
 
             flag1 = read_uint8(f)
             if flag1 != 0:
@@ -329,21 +336,33 @@ class MeshParser0(BaseMeshParser):
                 f"MESH: This is a multiple mesh type ({meshes_inside} splits ~ {meshes_inside_data} extra bytes) - COMPATIBILITY NOT GURANTEED"
             )
 
-        if type == 100:
+        if type == -1:
+            raise NotImplementedError("MESH: This mesh type is not yet implemented")
+
+        # Two independent decisions. They used to share one elif chain, which
+        # meant type 5 picked half-precision positions and then never reached
+        # the branch that widens its joint indices to uint16: the reader
+        # consumed 4 bytes instead of 8 and started decoding weights before
+        # their real offset.
+        #
+        # (a) vertex position / normal precision
+        if type == 20 or type == 21 or type == 22 or type == 23:
+            f.seek(bytes_to_skip, 1)
+            vert_float_read = read_dequant_16
+        elif type == 4 or type == 5 or type == 100:
             vert_float_read = read_half_float
+
+        # (b) per-vertex joint index width
+        if type == 2 or type == 3 or type == 5:
+            vert_bone_read = read_uint16
+            joint_index_bits = 16
+
+        if type == 100:
             get_logger().warning(
                 "MESH: This mesh has a non-standard UV count - UV data, bone joints and bone weights will be missing!"
             )
-        elif type == -1:
-            raise NotImplementedError("MESH: This mesh type is not yet implemented")
 
-        elif type == 4 or type == 5:
-            vert_float_read = read_half_float
-        elif type == 5 or type == 2 or type == 3:
-            vert_bone_read = read_uint16
-        elif type == 20 or type == 21 or type == 22 or type == 23:
-            f.seek(bytes_to_skip, 1)
-            vert_float_read = read_dequant_16
+        model["bones"]["joint_index_bits"] = joint_index_bits
 
         model["type"] = type
         model["mesh"]["data"] = (
@@ -416,11 +435,15 @@ class MeshParser0(BaseMeshParser):
             for _ in range(vertex_count):
                 model["mesh"]["uv"].append((0.0, 0.0))
 
-        if (
-            model["bones"]["has_bones"] == 1
-            or model["bones"]["has_bones"] == 4
-            and type != 100
-        ):
+        # `or` binds looser than `and`, so the original condition read as
+        # `has_bones == 1 or (has_bones == 4 and type != 100)` and pulled
+        # influences out of the stream even for type 100, where the block is
+        # not laid out the way the warning above says. Grouping is explicit
+        # now: a bone-carrying mesh reads influences unless it is type 100.
+        has_bone_block = (
+            model["bones"]["has_bones"] == 1 or model["bones"]["has_bones"] == 4
+        )
+        if has_bone_block and type != 100:
             model["bones"]["joints"] = []
             for _ in range(vertex_count):
                 model["bones"]["joints"].append([vert_bone_read(f) for _ in range(4)])
@@ -428,11 +451,11 @@ class MeshParser0(BaseMeshParser):
             model["bones"]["weights"] = []
             for _ in range(vertex_count):
                 model["bones"]["weights"].append([read_float(f) for _ in range(4)])
-        elif (
-            model["bones"]["has_bones"] == 1
-            or model["bones"]["has_bones"] == 4
-            and type == 100
-        ):
+        elif has_bone_block and type == 100:
+            # No usable influences in this variant. The slots are filled with
+            # zero weights on purpose: downstream code detects "bones but no
+            # influences" and exports the skeleton without a skin instead of
+            # advertising a rig that does not deform anything.
             model["bones"]["joints"] = []
             model["bones"]["weights"] = []
             for _ in range(vertex_count):

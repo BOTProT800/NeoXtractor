@@ -20,6 +20,19 @@ dependencies = [
     "flatbuffers>=25.12.19",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    # Two unrelated glTF/GLB implementations, used to cross-check the exporter
+    # output against something that shares no code with it.
+    "pygltflib>=1.16",
+    "trimesh>=4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
 [tool.uv]
 required-environments = [
     "sys_platform == 'darwin' and platform_machine == 'arm64' and platform_release <= '22'"

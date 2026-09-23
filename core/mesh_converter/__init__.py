@@ -3,9 +3,10 @@
 from core.mesh_loader import MeshData
 
 from .formats import ascii as mesh_ascii
-from .formats import fbx, gltf, iqe, obj, pmx, smd
+from .formats import fbx, glb, gltf, iqe, obj, pmx, smd
+from .gltf_scene import GLTFScene, MeshExportError, SkinDataError, build_scene
 
-FORMATS = [mesh_ascii, gltf, iqe, obj, pmx, smd, fbx]
+FORMATS = [mesh_ascii, glb, gltf, iqe, obj, pmx, smd, fbx]
 
 
 def convert_mesh(mesh: MeshData, target_format: type, **kwargs) -> bytes:
@@ -25,8 +26,13 @@ def convert_mesh(mesh: MeshData, target_format: type, **kwargs) -> bytes:
 
 __all__ = [
     "convert_mesh",
+    "build_scene",
+    "GLTFScene",
+    "MeshExportError",
+    "SkinDataError",
     "FORMATS",
     "mesh_ascii",
+    "glb",
     "gltf",
     "iqe",
     "obj",

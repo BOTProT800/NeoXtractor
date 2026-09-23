@@ -5,7 +5,12 @@ on:
     branches: [ main ]
 
 jobs:
+  test:
+    uses: ./.github/workflows/tests.yml
+
   build:
+    # Packaging only runs once the regression suite is green.
+    needs: test
     uses: ./.github/workflows/build.yml
     with:
       asset_suffix: '-edge'
