@@ -308,6 +308,44 @@ def matrix_from_quaternion(quaternion) -> np.ndarray:
     )
 
 
+def euler_xyz_from_matrix(matrix) -> np.ndarray:
+    """
+    Extract XYZ Euler angles, in radians, from a transform.
+
+    The angles reproduce the rotation as ``Rz @ Ry @ Rx``: rotate about X
+    first, then Y, then Z. That is the order Valve's SMD uses, and the one
+    Blender calls ``'XYZ'``.
+
+    Parameters:
+    - matrix: 4x4 or 3x3 transform. Any scale is normalised away first.
+
+    Returns:
+    - ``(rx, ry, rz)`` as float64.
+    """
+    array = np.asarray(matrix, dtype=np.float64)
+    basis = array[:3, :3].copy()
+
+    scale = np.linalg.norm(basis, axis=0)
+    if float(np.linalg.det(basis)) < 0.0:
+        scale[0] = -scale[0]
+    safe_scale = np.where(np.abs(scale) < MIN_AXIS_LENGTH, 1.0, scale)
+    basis = basis / safe_scale
+
+    # cos(ry), recovered from the part of the first column Y does not touch.
+    cos_y = math.sqrt(basis[0, 0] * basis[0, 0] + basis[1, 0] * basis[1, 0])
+    if cos_y > MIN_AXIS_LENGTH:
+        rx = math.atan2(basis[2, 1], basis[2, 2])
+        ry = math.atan2(-basis[2, 0], cos_y)
+        rz = math.atan2(basis[1, 0], basis[0, 0])
+    else:
+        # Gimbal lock: Y is at +-90 degrees and X and Z become the same axis,
+        # so the split between them is arbitrary. Put it all on X.
+        rx = math.atan2(-basis[1, 2], basis[1, 1])
+        ry = math.atan2(-basis[2, 0], cos_y)
+        rz = 0.0
+    return np.array([rx, ry, rz], dtype=np.float64)
+
+
 def compose_trs(translation, rotation, scale) -> np.ndarray:
     """Rebuild a 4x4 matrix from translation, ``(x, y, z, w)`` rotation, scale."""
     matrix = np.identity(4)

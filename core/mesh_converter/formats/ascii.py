@@ -1,14 +1,32 @@
 """ASCII Mesh Format Converter"""
 
+from core.logger import get_logger
+from core.mesh_converter.skeleton import (
+    IDENTITY_CONVERSION,
+    SkeletonError,
+    build_skeleton,
+    quaternion_from_matrix,
+)
 from core.mesh_loader import MeshData
 
 NAME = "Text Mesh (ASCII) Format"
 EXTENSION = ".ascii"
 
+# Geometry is written in the source basis, so the skeleton is resolved in that
+# same basis. Mesh and bones have to agree; which basis it is matters less.
+CONVERSION = IDENTITY_CONVERSION
+
 
 def convert(mesh: MeshData, flip_uv=False) -> bytes:
     """
     Convert mesh to ASCII format.
+
+    Bone lines carry the bone's rest position and orientation in model space,
+    taken through :mod:`core.mesh_converter.skeleton` so the matrix layout is
+    resolved once for every exporter. The previous version read
+    ``matrix.flatten()[:3]``, which is the first row of the stored array and
+    not a translation under any convention, and wrote a hardcoded identity
+    quaternion.
 
     Parameters:
     - mesh: MeshData object containing bones, vertices, faces, etc.
@@ -19,6 +37,23 @@ def convert(mesh: MeshData, flip_uv=False) -> bytes:
     """
     ascii_lines = []
 
+    skeleton = None
+    if mesh.has_bones and mesh.bones.names:
+        try:
+            skeleton = build_skeleton(
+                list(mesh.bones.parents),
+                list(mesh.bones.names),
+                list(mesh.bones.matrix),
+                conversion=CONVERSION,
+                mesh_positions=mesh.mesh.position,
+            )
+        except SkeletonError as error:
+            get_logger().warning(
+                "ASCII: skeleton could not be resolved (%s); "
+                "writing bones without transforms",
+                error,
+            )
+
     # Write Bone Count
     if mesh.has_bones:
         ascii_lines.append(f"{len(mesh.bones.names)}\n")
@@ -27,10 +62,11 @@ def convert(mesh: MeshData, flip_uv=False) -> bytes:
         for i, (name, parent) in enumerate(zip(mesh.bones.names, mesh.bones.parents)):
             ascii_lines.append(f"{name}\n")
             ascii_lines.append(f"{parent}\n")
-            if mesh.bones.matrix and i < len(mesh.bones.matrix):
-                matrix = mesh.bones.matrix[i]
-                position = " ".join(f"{val:.6f}" for val in matrix.flatten()[:3])
-                ascii_lines.append(f"{position} 0 0 0 1\n")
+            if skeleton is not None and i < len(skeleton.bones):
+                global_rest = skeleton.bones[i].global_rest
+                position = " ".join(f"{value:.6f}" for value in global_rest[:3, 3])
+                x, y, z, w = quaternion_from_matrix(global_rest[:3, :3])
+                ascii_lines.append(f"{position} {x:.6f} {y:.6f} {z:.6f} {w:.6f}\n")
             else:
                 ascii_lines.append("0.000000 0.000000 0.000000 0 0 0 1\n")
     else:

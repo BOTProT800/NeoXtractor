@@ -35,6 +35,18 @@ Los siete hallazgos se verificaron contra el código de partida y están corregi
 
 7. **Hay rutas que producen influencias vacías sin impedir un skin aparente.** *(Corregido.)* La condición que combinaba `or` y `and` se agrupó explícitamente; el tipo 100 ya no intenta leer influencias del flujo. Un modelo con huesos pero sin ninguna influencia utilizable exporta el esqueleto **sin** skin y lo advierte; si solo parte de los vértices carece de influencia, la exportación falla con los índices afectados en lugar de asignarlos a la raíz. [`tests/test_gltf_scene.py`: `test_bones_without_any_influence_export_without_a_skin`, `test_partially_unskinned_geometry_is_refused`]
 
+**Los demás exportadores usan ya el mismo contrato.**
+
+ASCII, PMX y SMD leían la traslación del hueso desde `matrix[0, 3]` o `matrix.flatten()[:3]`, incompatibles con la disposición de vector fila. Los tres pasan ahora por `core/mesh_converter/skeleton.py`, cada uno en el espacio que su formato pide, y se corrigieron de paso los defectos de jerarquía equivalentes a los del exportador glTF:
+
+- **ASCII**: posición global real del hueso y cuaternión de orientación real, en vez de basura de la primera fila y un `0 0 0 1` fijo.
+- **SMD**: el bloque `skeleton` es relativo al padre, con ángulos de Euler XYZ extraídos de la transformación local en vez de ceros fijos. Los nodos se emiten por índice ascendente, así que varias raíces ya no pierden ramas y un esqueleto sin raíz ya no lanza `ValueError`. Se escriben además los enlaces de peso por vértice, que antes se descartaban dejando solo el hueso dominante.
+- **PMX**: posición absoluta real del hueso; los huesos se emiten en orden topológico, que es lo que el formato exige y lo que cubre varias raíces y padres almacenados después de sus hijos.
+
+Los tres respetan el centinela derivado de `joint_index_bits` y **no reasignan a la raíz** una influencia inválida: la descartan y lo registran. PMX obliga a que todo vértice referencie un hueso, así que un vértice sin influencia utilizable cae en el primero y se informa cuántos, en lugar de disimularlo.
+
+Conservan su geometría sin convertir, así que el esqueleto se resuelve con `IDENTITY_CONVERSION` para que malla y huesos sigan en el mismo espacio.
+
 **Hipótesis contrastadas sobre la convención de matrices.**
 
 El visor obtenía la posición de cada hueso desde `matrix.T[:3, 3]`, es decir `matrix[3, :3]`, y el exportador IQE calculaba `M[i] @ inverse(M[padre])`. Ambas operaciones solo son coherentes si las matrices son **transformaciones globales de reposo almacenadas en convención de vector fila** (traslación en la última fila). Esa es ahora la interpretación declarada por omisión, y está documentada en `Bones` y en `core/mesh_converter/skeleton.py`.
@@ -95,7 +107,7 @@ Se rechaza la exportación, en lugar de disimularla: peso positivo sobre un cent
 
 **Comprobaciones ejecutadas.**
 
-Suite de regresión en `tests/`, 100 pruebas, ejecutada con `pytest 9.1.1` sobre Python 3.13.5 del entorno `.venv`. Sin Blender instalado quedan 95 pruebas y 5 saltadas, que es como corre en CI:
+Suite de regresión en `tests/`, 124 pruebas, ejecutada con `pytest 9.1.1` sobre Python 3.13.5 del entorno `.venv`. Sin Blender instalado quedan 119 pruebas y 5 saltadas, que es como corre en CI:
 
 ```
 tests/support/synthetic.py        fixtures: blobs .mesh byte a byte y MeshData
@@ -108,6 +120,7 @@ tests/test_gltf_scene.py          28 pruebas de escena, skin y geometría
 tests/test_glb_container.py       12 pruebas del contenedor y del ida y vuelta
 tests/test_skinning_deformation.py 13 pruebas de deformación
 tests/test_save_integration.py     4 pruebas del guardado desde la interfaz
+tests/test_other_exporters.py     24 pruebas de ASCII, PMX y SMD
 tests/test_blender_import.py       5 pruebas de importación real en Blender
 tests/support/blender_check.py     verificador ejecutable sobre cualquier .glb
 ```
@@ -192,8 +205,7 @@ Blender también descarta los vértices que ninguna cara referencia, así que el
 1. **Muestra real.** Ruta a un `.mesh` (preferiblemente el que fallaba), juego y versión. Permitiría confirmar la disposición y el papel de las matrices por variante, registrar hash y conteos, y cerrar la etapa 1.
 2. **Validador de Khronos.** Único punto de verificación que sigue sin cubrir. Requiere el binario de [KhronosGroup/glTF-Validator](https://github.com/KhronosGroup/glTF-Validator) o Node; no existe como paquete Python (índice completo de PyPI revisado). Mientras tanto, `tests/support/gltf_spec_check.py` reimplementa el subconjunto de reglas que este flujo puede incumplir —cotas y alineación de accessors, índices de skin y joints, normalización de pesos, normales unitarias, ciclos de nodos— y está declarado en el propio módulo como *no* siendo el validador oficial.
 3. **Convención de UV.** El exportador glTF conserva `v` sin invertir, como hacía antes; el exportador IQE escribe `1 - v`. La diferencia no afecta al rig pero conviene resolverla con una textura real.
-4. **Exportadores ASCII, PMX y SMD.** Siguen leyendo la traslación del hueso desde `matrix[0, 3]` o `matrix.flatten()[:3]`, incompatible con la convención de vector fila que usan el visor y el exportador IQE. Quedan fuera del alcance de esta meta, pero producen posiciones de hueso incorrectas y deberían pasar a usar `core/mesh_converter/skeleton.py`.
-5. **Submallas y paletas por bloque.** El parser sigue ignorando los bloques adicionales. Si una variante usa paleta de huesos por bloque, el cambio se concentra en cómo se construye `bone_to_slot`.
+4. **Submallas y paletas por bloque.** El parser sigue ignorando los bloques adicionales. Si una variante usa paleta de huesos por bloque, el cambio se concentra en cómo se construye `bone_to_slot`.
 
 **Cómo reproducir la verificación en Blender.**
 

@@ -6,15 +6,34 @@ from typing import cast
 import pymeshio.pmx.writer
 from pymeshio import common, pmx
 
+from core.logger import get_logger
+from core.mesh_converter.skeleton import (
+    IDENTITY_CONVERSION,
+    SkeletonError,
+    build_skeleton,
+)
 from core.mesh_loader import MeshData
 
 NAME = "Polygon Model eXtended (PMX) Format"
 EXTENSION = ".pmx"
 
+# Geometry is written in the source basis, so the skeleton is resolved in that
+# same basis. Mesh and bones have to agree.
+CONVERSION = IDENTITY_CONVERSION
+
+#: Influence slots a PMX Bdef4 vertex holds.
+MAX_LINKS = 4
+
 
 def convert(mesh: MeshData) -> bytes:
     """
     Convert mesh to PMX format.
+
+    PMX stores each bone's rest position **absolutely**, in model space. The
+    previous version read it from ``matrix[0:3, 3]``, the wrong slot for the
+    row-vector layout NeoX files use, so every bone landed on the origin; it
+    also walked the hierarchy from a single root, dropping the other branches
+    when a file had more than one.
 
     Parameters:
     - mesh: MeshData object containing bones, vertices, faces, etc.
@@ -28,28 +47,39 @@ def convert(mesh: MeshData) -> bytes:
     pmx_model.comment = "Created by NeoXtractor"
 
     # Build bone hierarchy if bones exist
-    if mesh.has_bones:
-        parent_child_dict = {}
-        old2new = {}
-        index_pool = [-1]
+    skeleton = None
+    if mesh.has_bones and mesh.bones.names:
+        try:
+            skeleton = build_skeleton(
+                list(mesh.bones.parents),
+                list(mesh.bones.names),
+                list(mesh.bones.matrix),
+                conversion=CONVERSION,
+                mesh_positions=mesh.mesh.position,
+            )
+        except SkeletonError as error:
+            get_logger().warning(
+                "PMX: skeleton could not be resolved (%s); "
+                "falling back to a single root bone",
+                error,
+            )
+
+    if skeleton is not None:
         bone_pool: list[pmx.Bone] = []
+        # PMX requires a bone's parent to already be defined, so bones are
+        # emitted in the skeleton's topological order. That covers several
+        # roots and parents stored after their children in one go.
+        old2new = {source: position for position, source in enumerate(skeleton.order)}
 
-        # Build parent-child relationships
-        for i, p in enumerate(mesh.bones.parents):
-            if p not in parent_child_dict:
-                parent_child_dict[p] = []
-            parent_child_dict[p].append(i)
-
-        def build_joint(index, parent_index):
-            matrix = mesh.bones.matrix[index]
-            # Extract translation from matrix for PMX
-            x, y, z = matrix[0, 3], matrix[1, 3], matrix[2, 3]
+        for source_index in skeleton.order:
+            bone = skeleton.bones[source_index]
+            x, y, z = bone.global_rest[:3, 3]
             bone_pool.append(
                 pmx.Bone(
-                    name=mesh.bones.names[index],
-                    english_name=mesh.bones.names[index],
-                    position=common.Vector3(x, y, z),
-                    parent_index=parent_index,
+                    name=bone.name,
+                    english_name=bone.name,
+                    position=common.Vector3(float(x), float(y), float(z)),
+                    parent_index=-1 if bone.parent == -1 else old2new[bone.parent],
                     layer=0,
                     flag=0,
                 )
@@ -57,28 +87,6 @@ def convert(mesh: MeshData) -> bytes:
             bone_pool[-1].setFlag(pmx.BONEFLAG_CAN_ROTATE, True)
             bone_pool[-1].setFlag(pmx.BONEFLAG_IS_VISIBLE, True)
             bone_pool[-1].setFlag(pmx.BONEFLAG_CAN_MANIPULATE, True)
-
-        def deep_first_search(index, index_pool, parent_index):
-            index_pool[0] += 1
-            current_node_index = index_pool[0]
-            old2new[index] = current_node_index
-            build_joint(index, parent_index)
-            if index in parent_child_dict:
-                for child in parent_child_dict[index]:
-                    deep_first_search(child, index_pool, current_node_index)
-
-        # Find root bone and build hierarchy
-        try:
-            root_index = mesh.bones.parents.index(-1)
-            deep_first_search(root_index, index_pool, -1)
-        except ValueError:
-            # No root bone found, create default structure
-            for i in range(len(mesh.bones.names)):
-                old2new[i] = i
-                build_joint(
-                    i,
-                    mesh.bones.parents[i] if mesh.bones.parents[i] != -1 else -1,
-                )
 
         pmx_model.bones = bone_pool
     else:
@@ -97,33 +105,62 @@ def convert(mesh: MeshData) -> bytes:
         pmx_model.bones = [root_bone]
         old2new = {0: 0}
 
+    sentinel = mesh.bones.joint_index_sentinel
+
+    def influences(vertex_index: int) -> list[tuple[int, float]]:
+        """
+        Collect a vertex's usable influences as PMX bone indices, heaviest first.
+
+        A slot holding this file's empty-slot sentinel, or an index no bone
+        answers to, is skipped. When it carries a positive weight that is a
+        data problem, so it is reported instead of being quietly folded onto
+        the root the way the previous version did.
+        """
+        if skeleton is None or vertex_index >= len(mesh.bones.joints):
+            return []
+
+        merged: dict[int, float] = {}
+        for joint_index, weight in zip(
+            mesh.bones.joints[vertex_index], mesh.bones.weights[vertex_index]
+        ):
+            weight = float(weight)
+            if weight <= 0.0:
+                continue
+            joint_index = int(joint_index)
+            if joint_index == sentinel or joint_index not in old2new:
+                get_logger().warning(
+                    "PMX: vertex %d puts weight %g on bone index %d, which is not a "
+                    "usable bone; the influence is dropped",
+                    vertex_index,
+                    weight,
+                    joint_index,
+                )
+                continue
+            target = old2new[joint_index]
+            merged[target] = merged.get(target, 0.0) + weight
+
+        ranked = sorted(merged.items(), key=lambda item: -item[1])[:MAX_LINKS]
+        total = sum(weight for _, weight in ranked)
+        if total <= 0.0:
+            return []
+        return [(index, weight / total) for index, weight in ranked]
+
+    unweighted = 0
     for i, position in enumerate(mesh.mesh.position):
         x, y, z = position
         nx, ny, nz = mesh.mesh.normal[i]
         u, v = mesh.mesh.uv[i]
 
-        if mesh.has_bones and i < len(mesh.bones.joints):
-            # Map old bone indices to new ones
-            vertex_joint_index = []
-            for joint_idx in mesh.bones.joints[i]:
-                if joint_idx in old2new:
-                    vertex_joint_index.append(old2new[joint_idx])
-                else:
-                    vertex_joint_index.append(0)  # Default to root bone
+        links = influences(i)
+        if skeleton is not None and not links:
+            unweighted += 1
 
-            # Ensure we have 4 bone indices and weights
-            while len(vertex_joint_index) < 4:
-                vertex_joint_index.append(0)
-            vertex_joint_index = vertex_joint_index[:4]
-
-            vertex_weights = (
-                mesh.bones.weights[i]
-                if i < len(mesh.bones.weights)
-                else [1.0, 0.0, 0.0, 0.0]
-            )
-            while len(vertex_weights) < 4:
-                vertex_weights.append(0.0)
-            vertex_weights = vertex_weights[:4]
+        if links:
+            # Pad to the four slots Bdef4 always carries. Empty slots point at
+            # bone 0 with weight 0, which binds nothing.
+            padded = links + [(0, 0.0)] * (MAX_LINKS - len(links))
+            vertex_joint_index = [index for index, _ in padded]
+            vertex_weights = [weight for _, weight in padded]
 
             vertex = pmx.Vertex(
                 common.Vector3(cast(int, x), cast(int, y), cast(int, z)),
@@ -133,7 +170,10 @@ def convert(mesh: MeshData) -> bytes:
                 0.0,
             )
         else:
-            # No bone data - assign to root bone
+            # Either the mesh has no rig at all, or this vertex has nothing
+            # usable to bind to. PMX gives every vertex a bone, so there is no
+            # way to express "unbound"; the count is reported below so the
+            # fallback is visible rather than silent.
             vertex = pmx.Vertex(
                 common.Vector3(cast(int, x), cast(int, y), cast(int, z)),
                 common.Vector3(cast(int, nx), cast(int, ny), cast(int, nz)),
@@ -142,6 +182,15 @@ def convert(mesh: MeshData) -> bytes:
                 0.0,
             )
         pmx_model.vertices.append(vertex)
+
+    if unweighted:
+        get_logger().warning(
+            "PMX: %d of %d vertices had no usable influence and were bound to the "
+            "first bone, because the format requires one. They will not deform "
+            "with the rig as intended.",
+            unweighted,
+            len(mesh.mesh.position),
+        )
 
     # Add faces
     for face in mesh.mesh.face:
