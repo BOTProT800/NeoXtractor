@@ -35,7 +35,7 @@ class Rotor(object):
         self.n_rotors: int = n_rotors
         self.key: str = key
         self.rotors: tuple = ()
-        self.positions: list[list[int] | None]
+        self.positions: list[list[int] | None] = [None, None]
 
     # encrypts the buffer
     def encrypt(self, buf: bytes) -> bytes:
