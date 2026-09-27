@@ -122,7 +122,7 @@ tests/test_skinning_deformation.py 13 pruebas de deformación
 tests/test_save_integration.py     4 pruebas del guardado desde la interfaz
 tests/test_other_exporters.py     24 pruebas de ASCII, PMX y SMD
 tests/test_animation.py           28 pruebas del escritor de animaciones
-tests/test_rgis.py                18 pruebas del lector RGIS y su puente
+tests/test_rgis.py                21 pruebas del lector RGIS y su puente
 tests/test_blender_import.py       6 pruebas de importación real en Blender
 tests/support/blender_check.py     verificador ejecutable sobre cualquier .glb
 ```
@@ -317,7 +317,7 @@ La primera meta deja preparado lo que la segunda necesita: identidad de hueso de
    por clip:
      char[32] nombre | char[32] vacío | char[32] raíz | u16 nº huesos
      char[32] × huesos
-     u16[8] cabecera   ([0]=fps, [6]=flag de layout, [7]=nº keyframes)
+     u16[8] cabecera   ([6]=campo de bits de layout, [7]=nº keyframes)
      float × keys      tiempos en MILISEGUNDOS
      por hueso:
        u8 t_anim, u8 r_anim, u8 s_anim, u8 relleno
@@ -350,7 +350,23 @@ La primera meta deja preparado lo que la segunda necesita: identidad de hueso de
 
 La segunda meta se cierra cuando al menos un clip real del juego objetivo reproduce el movimiento esperado sobre el mismo rig, sin modificar sus pesos ni su pose de enlace para compensar errores. **Los 22 clips de `jianzao_dunpai` se exportan y se reproducen en Blender sin tocar pesos ni bind pose**, así que esa condición está cumplida para la variante verificada. Lo que queda es el punto 4 y la variante de layout no descifrada.
 
-**Limitación conocida del lector RGIS.** Un clip de los 35 muestreados (`walk_f` en `jianzao_guanmu.gis`) lleva `cabecera[6] = 0x0104` en vez de `0x0004` y almacena **un array de tiempos por hueso** antes de los canales. Su layout no está resuelto: al leer la cabecera de canales que sigue a esos tiempos me desalineo por 2 bytes. Esos clips se saltan con su causa registrada en `RGISFile.skipped`, en vez de producir datos plausibles pero falsos. Afecta a 9 de los 18 clips de ese archivo y a ninguno de los otros dos.
+**`cabecera[6]` es un campo de bits, no un enum.** Descubierto al probar el `.gis` del modelo del usuario, que usa `0x0006` y al principio rechacé por error:
+
+| Bit | Significado |
+| --- | --- |
+| `0x0004` | puesto siempre; codificación base |
+| `0x0002` | rotaciones en **float16** en vez de float32 |
+| `0x0100` | **un array de tiempos por hueso** — no descifrado |
+
+Dimensionar mal el bit `0x0002` desplaza todos los huesos siguientes, así que se lee del flag y no se adivina. Un bit no reconocido hace fallar la lectura en vez de ignorarse.
+
+`cabecera[0]` vale 30 en unos archivos y `0xFFFF` en otros, así que los fps se derivan de los tiempos muestreados.
+
+**Limitación conocida.** La variante `0x0100` (tiempos por hueso) sigue sin descifrar: al leer la cabecera de canales posterior a esos tiempos me desalineo por 2 bytes. Afecta a 1 de los 45 clips muestreados (`walk_f` en `jianzao_guanmu.gis`) y detiene la lectura de los 9 restantes de ese archivo. Esos clips se saltan con su causa en `RGISFile.skipped` en vez de producir datos plausibles pero falsos.
+
+**Validación con cuatro archivos reales.** `jianzao_dunpai.gis` (22 clips), `jianzao_huojian.gis` (3) y `tiejiayong.gis` (11) se recorren **byte a byte hasta el último**; `jianzao_guanmu.gis` se detiene exactamente en la variante no descifrada, como debe. 13 384 cuaterniones leídos, **ninguno no-unitario**.
+
+**Verificado con el modelo original del usuario.** `temp/tiejiayong_03.mesh` + `tiejiayong.gis` (de `res/npc.npk`) exportan 10 clips del juego (`idle`, `absorb`, `attack`, `die`, `glide`, `spawn`, `use`…). Blender 4.5.14 importa las 10 acciones, desplaza la malla 3.29 unidades a mitad del clip y 1.43 a un cuarto, con pivotes, jerarquía y grupos de vértices correctos. El clip `die_init` no tiene ningún canal utilizable por este rig y se informa.
 
 **Cómo exportar animaciones.**
 

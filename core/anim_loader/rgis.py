@@ -19,7 +19,7 @@ files byte for byte::
       char[32]  root bone name
       uint16    bone_count
       char[32]  × bone_count              bones this clip drives
-      uint16[8] header; [0] = fps, [6] = layout flag, [7] = key count
+      uint16[8] header; [6] = layout bitfield, [7] = key count
       float     × key_count               sample times, in MILLISECONDS
       per bone:
         uint8   translation_animated
@@ -47,9 +47,14 @@ the ten bones differ, all of them halves of left/right pairs -- so it is kept
 for diagnostics and never used to rebuild the bind pose. The skin comes from
 the ``.mesh``.
 
-Known gap: a clip whose header flag (``header[6]``) is not 4 stores a separate
-time array per bone. One clip of the 35 sampled does this. Its layout is not
-worked out, so those clips are reported and skipped rather than guessed at.
+``header[6]`` is a bitfield, not an enum. ``0x0004`` is always set. ``0x0002``
+stores rotations as float16 quaternions instead of float32 -- getting that
+wrong shifts every following bone, so it is read from the flag rather than
+guessed. ``0x0100`` gives each bone its own time array; that variant is not
+decoded yet and such clips are reported and skipped rather than guessed at.
+
+``header[0]`` is 30 in some files and ``0xFFFF`` in others, so the frame rate is
+derived from the sample times instead.
 """
 
 from __future__ import annotations
@@ -64,8 +69,18 @@ MAGIC = b"RGIS"
 #: Size of a name field, NUL padded.
 NAME_SIZE = 32
 
-#: ``header[6]`` value for the layout this reader understands.
-LAYOUT_SHARED_TIMES = 4
+# ``header[6]`` is a bitfield describing how the per-bone payload is encoded.
+#: Always set in every sample; the baseline encoding.
+LAYOUT_BASE = 0x0004
+#: Rotations are stored as float16 quaternions instead of float32.
+LAYOUT_HALF_ROTATION = 0x0002
+#: Each bone carries its own time array. Not decoded yet.
+LAYOUT_PER_BONE_TIMES = 0x0100
+#: Bits this reader knows how to act on.
+LAYOUT_KNOWN = LAYOUT_BASE | LAYOUT_HALF_ROTATION
+
+#: Retained for callers that referred to the old name.
+LAYOUT_SHARED_TIMES = LAYOUT_BASE
 
 #: Sanity ceilings, so a misread length cannot ask for gigabytes.
 MAX_CLIPS = 4096
@@ -286,24 +301,40 @@ def _read_clip(cursor: _Cursor) -> RGISClip:
     bone_names = [cursor.name() for _ in range(bone_count)]
 
     header = cursor.take("<8H")
-    fps, layout_flag, key_count = header[0], header[6], header[7]
+    layout_flag, key_count = header[6], header[7]
     if key_count > MAX_KEYS:
         raise RGISReadError(f"clip {name!r} declares {key_count} keys")
-    if layout_flag != LAYOUT_SHARED_TIMES:
+    if layout_flag & LAYOUT_PER_BONE_TIMES:
         raise RGISUnsupportedLayout(
-            f"clip {name!r} uses layout flag {layout_flag} (0x{layout_flag:04x}); "
-            "that variant stores a separate time array per bone and is not "
-            "decoded yet"
+            f"clip {name!r} uses layout flag 0x{layout_flag:04x}, which carries a "
+            "separate time array per bone; that variant is not decoded yet"
         )
+    unknown_bits = layout_flag & ~LAYOUT_KNOWN
+    if unknown_bits:
+        raise RGISUnsupportedLayout(
+            f"clip {name!r} uses layout flag 0x{layout_flag:04x} with unrecognised "
+            f"bits 0x{unknown_bits:04x}"
+        )
+    # Bit 1 halves the rotation payload. Sizing this wrong shifts every
+    # following bone, so it is read from the flag rather than sniffed.
+    rotation_dtype = "<f2" if layout_flag & LAYOUT_HALF_ROTATION else "<f4"
 
     # Times are stored in milliseconds.
     times = cursor.array(key_count, 1, "<f4").reshape(-1) / 1000.0
+
+    # header[0] holds 30 in some files and 0xFFFF in others, so the frame rate
+    # is derived from the samples instead of trusted from the header.
+    fps = 0
+    if len(times) > 1:
+        step = float(times[-1] - times[0]) / (len(times) - 1)
+        if step > 0.0:
+            fps = int(round(1.0 / step))
 
     tracks = []
     for bone_name in bone_names:
         t_anim, r_anim, s_anim, padding = cursor.take("<4B")
         translation = cursor.array(key_count if t_anim else 1, 3, "<f4")
-        rotation = cursor.array(key_count if r_anim else 1, 4, "<f4")
+        rotation = cursor.array(key_count if r_anim else 1, 4, rotation_dtype)
         scale = cursor.array(key_count if s_anim else 1, 3, "<f2")
         tracks.append(
             RGISTrack(

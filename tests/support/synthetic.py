@@ -348,12 +348,15 @@ def build_rgis_file(
     clips,
     version: int = 2,
     unknown: int = 774,
+    half_rotation: bool = False,
 ) -> bytes:
     """
     Serialise an RGIS animation container the real reader can parse.
 
     Parameters:
     - reference: list of ``(name, translation, rotation_xyzw, scale)``.
+    - half_rotation: store rotations as float16, which the ``0x0002`` layout
+      bit selects.
     - clips: list of dicts with ``name``, ``fps``, ``times`` (seconds),
       ``tracks`` and optionally ``layout_flag`` and ``root``. Each track is
       ``(bone_name, translation, rotation, scale)`` where a channel is either a
@@ -412,7 +415,7 @@ def build_rgis_file(
                 0,
             )
             out += translation.astype("<f4").tobytes()
-            out += rotation.astype("<f4").tobytes()
+            out += rotation.astype("<f2" if half_rotation else "<f4").tobytes()
             out += scale.astype("<f2").tobytes()
         out += struct.pack("<B", 0)
 

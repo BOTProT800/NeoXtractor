@@ -27,7 +27,7 @@ TURN_Z_45 = (0.0, 0.0, np.sin(np.radians(22.5)), np.cos(np.radians(22.5)))
 IDENTITY_Q = (0.0, 0.0, 0.0, 1.0)
 
 
-def simple_file(**overrides):
+def simple_file(half_rotation=False, **overrides):
     """One clip turning `arm_l` about Z, on the asymmetric rig's bone names."""
     clip = {
         "name": "wave",
@@ -45,6 +45,7 @@ def simple_file(**overrides):
             ("arm_l", (1.0, 2.0, 0.0), IDENTITY_Q, (1.0, 1.0, 1.0)),
         ],
         clips=[clip],
+        half_rotation=half_rotation,
     )
 
 
@@ -127,24 +128,53 @@ class TestReader:
         basis = matrix_from_quaternion(rotation)
         assert basis[2, 2] == pytest.approx(1.0)  # Z axis is the one held fixed
 
-    def test_an_unknown_layout_flag_is_reported_not_guessed(self):
+    def test_the_per_bone_timeline_variant_is_reported_not_guessed(self):
         """
-        One clip in the samples stores a time array per bone.
+        Bit 0x0100 gives each bone its own time array.
 
-        Its layout is not worked out, so it is skipped with a reason rather
+        That layout is not worked out, so it is skipped with a reason rather
         than parsed into plausible-looking nonsense.
         """
-        parsed = read_rgis(simple_file(layout_flag=260))
+        parsed = read_rgis(simple_file(layout_flag=0x0104))
 
         assert parsed.clips == []
         assert len(parsed.skipped) == 1
         name, reason = parsed.skipped[0]
         assert name == "wave"
-        assert "260" in reason
+        assert "0x0104" in reason
 
-    def test_strict_mode_raises_on_an_unknown_layout(self):
-        with pytest.raises(RGISUnsupportedLayout, match="layout flag 260"):
-            read_rgis(simple_file(layout_flag=260), strict=True)
+    def test_strict_mode_raises_on_the_per_bone_timeline_variant(self):
+        with pytest.raises(RGISUnsupportedLayout, match="0x0104"):
+            read_rgis(simple_file(layout_flag=0x0104), strict=True)
+
+    def test_an_unrecognised_layout_bit_is_refused(self):
+        """A bit nobody has explained must not be silently ignored."""
+        with pytest.raises(RGISUnsupportedLayout, match="unrecognised bits"):
+            read_rgis(simple_file(layout_flag=0x0044), strict=True)
+
+    def test_half_precision_rotations_are_read_when_the_flag_says_so(self):
+        """
+        Bit 0x0002 halves the rotation payload.
+
+        Sizing it wrong shifts every following bone, so it is read from the
+        flag rather than sniffed. This is what the samples of the user's own
+        model use.
+        """
+        full = read_rgis(simple_file())
+        half = read_rgis(simple_file(layout_flag=0x0006, half_rotation=True))
+
+        a = full.clips[0].tracks[0].rotation
+        b = half.clips[0].tracks[0].rotation
+        assert a.shape == b.shape
+        # float16 keeps these to about three decimals.
+        assert b[1] == pytest.approx(a[1], abs=2e-3)
+        assert np.allclose(np.linalg.norm(b, axis=1), 1.0, atol=2e-3)
+
+    def test_the_frame_rate_comes_from_the_times_not_the_header(self):
+        """``header[0]`` is 30 in some files and 0xFFFF in others."""
+        parsed = read_rgis(simple_file(times=[0.0, 1 / 60, 2 / 60]))
+
+        assert parsed.clips[0].fps == 60
 
     def test_a_truncated_file_is_refused(self):
         data = simple_file()
