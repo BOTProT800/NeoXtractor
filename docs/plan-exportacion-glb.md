@@ -166,7 +166,29 @@ El mismo verificador sobre la salida del **exportador original** falla, y confir
 
 Blender también descarta los vértices que ninguna cara referencia, así que el verificador empareja vértices por posición en vez de por índice.
 
-**No comprobado con modelos reales.** No se encontraron muestras `.mesh`, `.glb`, `.gltf` ni archivos de juego NPK/WPK/IDX dentro del proyecto. Todo lo anterior demuestra el comportamiento del código sobre datos construidos y verificado por tres implementaciones ajenas; no reproduce el personaje del usuario ni confirma la convención de matrices de ninguna variante concreta.
+**Verificado con un modelo real.** El 26 de septiembre de 2026 se comprobó `temp/tiejiayong_03.mesh`, y el usuario confirmó que el esqueleto se comporta correctamente en su visor.
+
+| | |
+| --- | --- |
+| sha256 | `f7c2275bc5178e6413631cdeb1548d04ce44cd79d5f2603fa412b06d911033b3` |
+| tamaño | 192 192 bytes |
+| versión / variante | 2 / tipo 1, bone kind 1 |
+| geometría | 2787 vértices, 2001 caras, 2787 UV |
+| esqueleto | 14 huesos, una raíz (`dummy01`), **1 padre almacenado después de su hijo** |
+| índices de influencia | 8 bits, centinela 255, rango observado 1..255 |
+
+Lo que confirma este archivo, que los fixtures sintéticos no podían:
+
+- **La disposición de vector fila es la correcta**, y se detectó de los propios datos: la última columna es `(0,0,0,1)` en las 14 matrices. No fue una suposición heredada del visor.
+- La variante es **distinta de todos los fixtures** (versión 2 / tipo 1 / kind 1 frente a versión 5 / tipo 4-5 / kind 4), así que la convención no es un artefacto de cómo se construyeron las pruebas.
+- Los orígenes de los huesos forman una cadena anatómicamente coherente, con una bifurcación real en `bone_02`.
+- El defecto 3 —padres almacenados después de sus hijos— **ocurre en archivos reales**, no solo en el `dummy_root` sintético del parser.
+- Los pesos llegan ya normalizados: desviación máxima `5.96e-08`, puro redondeo de `float32`. El umbral de `1e-2` que rechaza la exportación es holgado y no enmascara nada.
+- El centinela 255 aparece de verdad en datos de 8 bits y se trata como ranura vacía, mientras que el rango útil llega hasta 13.
+
+Importado en Blender 4.5.14 sin un solo fallo: geometría en reposo con error máximo `1.9e-06` frente a una tolerancia de `1.2e-03`, cada cabeza de hueso en su joint, jerarquía y grupos de vértices correctos, y al posar `bone_01`, `bone_02` y `bone_03` se mueve exactamente su subárbol.
+
+Los `.glb` y `.gltf` que exportó el usuario son **byte a byte idénticos** a los que produce el código actual, así que lo que validó es exactamente esta versión.
 
 **Estado de las seis etapas de la primera meta.**
 
@@ -193,16 +215,18 @@ Blender también descarta los vértices que ninguna cara referencia, así que el
 | El giro de la raíz mueve el conjunto coherentemente alrededor del pivote esperado y volver a reposo recupera la geometría | Cumplido; pivotes confirmados en Blender |
 | Varias raíces, padres posteriores, índices de 16 bits y hueso 255 válido superan regresiones; los datos incompletos se rechazan con causa identificable | Cumplido |
 | La salida sin huesos continúa funcionando | Cumplido |
-| Compatibilidad declarada por variante verificada | **Pendiente**: no hay ninguna variante verificada con un archivo real |
+| Compatibilidad declarada por variante verificada | Cumplido para versión 2 / tipo 1 / kind 1, verificado con `tiejiayong_03.mesh`. Las demás variantes siguen sin muestra |
 
-**La primera meta no está cerrada.** El comportamiento del exportador está verificado por tres implementaciones ajenas al proyecto, incluida una importación y un posado reales en Blender. Quedan dos condiciones abiertas:
+**La primera meta está cumplida para la variante verificada.** El exportador está comprobado por tres implementaciones ajenas al proyecto, por una importación y un posado reales en Blender, y por un modelo real del juego cuyo esqueleto el usuario confirmó correcto en su visor.
+
+Queda una condición formal abierta y un límite que conviene no olvidar:
 
 - El **validador oficial de Khronos** no se ejecutó. No existe como paquete Python: se buscó el índice completo de PyPI (46 MB) y solo hay parsers (`gltflib`, `pygltflib`, `pygltfio`, `gltfloupe`, …), ninguno es el validador. Requiere el binario de Khronos o Node, ninguno de los dos disponible ni autorizado.
-- **Ninguna variante NeoX está verificada con un archivo real**, así que no puede declararse compatibilidad con ningún juego concreto.
+- La compatibilidad se declara **solo para la variante verificada** (versión 2 / tipo 1 / kind 1). Las demás siguen apoyadas en detección automática y fixtures sintéticos, que es bastante, pero no es lo mismo que una muestra.
 
 **Pendientes, en orden de utilidad.**
 
-1. **Muestra real.** Ruta a un `.mesh` (preferiblemente el que fallaba), juego y versión. Permitiría confirmar la disposición y el papel de las matrices por variante, registrar hash y conteos, y cerrar la etapa 1.
+1. **Muestras de otras variantes.** La versión 2 / tipo 1 ya está verificada. Un `.mesh` de tipo 5 (índices de 16 bits) o de los tipos cuantizados 20-23 confirmaría que la detección automática acierta también ahí.
 2. **Validador de Khronos.** Único punto de verificación que sigue sin cubrir. Requiere el binario de [KhronosGroup/glTF-Validator](https://github.com/KhronosGroup/glTF-Validator) o Node; no existe como paquete Python (índice completo de PyPI revisado). Mientras tanto, `tests/support/gltf_spec_check.py` reimplementa el subconjunto de reglas que este flujo puede incumplir —cotas y alineación de accessors, índices de skin y joints, normalización de pesos, normales unitarias, ciclos de nodos— y está declarado en el propio módulo como *no* siendo el validador oficial.
 3. **Convención de UV.** El exportador glTF conserva `v` sin invertir, como hacía antes; el exportador IQE escribe `1 - v`. La diferencia no afecta al rig pero conviene resolverla con una textura real.
 4. **Submallas y paletas por bloque.** El parser sigue ignorando los bloques adicionales. Si una variante usa paleta de huesos por bloque, el cambio se concentra en cómo se construye `bone_to_slot`.
