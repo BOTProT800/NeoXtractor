@@ -382,7 +382,17 @@ Dimensionar mal el bit `0x0002` desplaza todos los huesos siguientes, así que s
 
 **Cómo exportar animaciones.**
 
-Desde la interfaz: «Save As → glTF 2.0 Binary (GLB) Format with animations (.gis)...». Pide el `.gis` y luego el destino. Las mallas llegan al visor como bytes de un NPK, sin ruta donde mirar al lado, así que el archivo de animación se elige explícitamente en vez de adivinarse.
+Desde la interfaz: «Save As → glTF 2.0 Binary (GLB) Format with animations (.gis)...».
+
+**No hace falta abrir varios NPK: la malla y sus animaciones viajan en el mismo.** La acción busca los `.gis` que estén en la misma carpeta del NPK ya abierto y los ofrece en una lista; solo cae al diálogo de archivo si no encuentra ninguno.
+
+Medido sobre las muestras de Cyber Hunter:
+
+| NPK | Reparto |
+| --- | --- |
+| `res/npc.npk` | 25 de 26 mallas tienen un `.gis` en su propia carpeta; uno por personaje, cubriendo todas sus mallas |
+| `res/character/transformers.npk` | 6 de 6, con los `.gis` junto a las mallas |
+| `res/character/male.npk` | 190 mallas y **2402** `.gis`: los personajes jugables usan una biblioteca compartida (`common/dongzuoku_gis/`, `<pj>/common_gis/`) dentro del mismo NPK, con un archivo por clip |
 
 Desde la línea de órdenes:
 

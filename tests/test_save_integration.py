@@ -88,3 +88,106 @@ def test_every_registered_format_has_a_name_and_extension():
         assert isinstance(module.NAME, str) and module.NAME
         assert module.EXTENSION.startswith(".")
         assert callable(module.convert)
+
+
+class _StubEntry:
+    """Minimal stand-in for an NPK entry: the viewer only reads its name."""
+
+    def __init__(self, filename):
+        self.filename = filename
+
+
+class _StubIndex:
+    def __init__(self, filename):
+        self.filename = filename
+
+
+class _StubNPK:
+    def __init__(self, names):
+        self.indices = [_StubIndex(name) for name in names]
+
+
+class _ViewerWithFile(_StubViewer):
+    def __init__(self, mesh, entry_name):
+        super().__init__(mesh)
+        self._entry = _StubEntry(entry_name)
+
+    def get_file(self):
+        return self._entry
+
+
+@pytest.fixture
+def sibling_animations(monkeypatch):
+    """Import the discovery helper with a stubbed NPK accessor."""
+    pytest.importorskip("PySide6")
+    from gui.widgets.tab_window_ui import mesh_viewer as module
+
+    def install(names):
+        monkeypatch.setattr(module, "get_npk_file", lambda: _StubNPK(names))
+        return module._sibling_animations
+
+    return install
+
+
+#: NPK entry paths use backslashes; built here so no escape can hide in a
+#: literal.
+SEP = chr(92)
+
+
+def npk_path(folder: str, name: str) -> str:
+    """An NPK-style entry path, ``folder\\name``."""
+    return folder + SEP + name
+
+
+def test_animations_beside_the_mesh_are_found(sibling_animations):
+    """
+    A mesh and its animations ship in the same NPK folder.
+
+    Measured on the samples: 25 of 26 NPC meshes have a .gis in their own
+    folder, so the file is almost always already open and there is no reason
+    to send the user hunting on disk.
+    """
+    mesh_entry = npk_path("tiejiayong", "tiejiayong_03.mesh")
+    find = sibling_animations(
+        [
+            mesh_entry,
+            npk_path("tiejiayong", "tiejiayong.gis"),
+            npk_path("tiejiayong", "tiejiayong_d.dds"),
+            npk_path("otherguy", "otherguy.gis"),
+        ]
+    )
+
+    found = find(_ViewerWithFile(asymmetric_character(), mesh_entry))
+
+    # Backslash paths are normalised on the way out.
+    assert found == [("tiejiayong/tiejiayong.gis", 1)]
+
+
+def test_animations_in_other_folders_are_not_offered(sibling_animations):
+    mesh_entry = npk_path("a", "thing.mesh")
+    find = sibling_animations(
+        [mesh_entry, npk_path("b", "one.gis"), npk_path("c", "two.gis")]
+    )
+
+    assert find(_ViewerWithFile(asymmetric_character(), mesh_entry)) == []
+
+
+def test_several_siblings_come_back_sorted(sibling_animations):
+    """Player characters keep a shared library, so several is the normal case."""
+    mesh_entry = npk_path("lib", "hero.mesh")
+    find = sibling_animations(
+        [
+            mesh_entry,
+            npk_path("lib", "run.gis"),
+            npk_path("lib", "attack.gis"),
+            npk_path("lib", "idle.gis"),
+        ]
+    )
+
+    found = find(_ViewerWithFile(asymmetric_character(), mesh_entry))
+
+    assert [name for name, _ in found] == [
+        "lib/attack.gis",
+        "lib/idle.gis",
+        "lib/run.gis",
+    ]

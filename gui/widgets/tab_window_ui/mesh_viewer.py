@@ -1,6 +1,7 @@
 """Code for viewer tab window customization."""
 
 import os
+import posixpath
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -12,6 +13,7 @@ from core.mesh_converter import FORMATS, convert_mesh
 from core.mesh_converter.animation import clips_from_rgis
 from core.mesh_converter.formats import glb
 from core.mesh_converter.gltf_scene import build_scene
+from gui.utils.npk import get_npk_file
 from gui.widgets.managed_rhi_widget import ManagedRhiWidget
 
 if TYPE_CHECKING:
@@ -19,34 +21,104 @@ if TYPE_CHECKING:
     from gui.windows.viewer_tab_window import ViewerTabWindow
 
 
+BROWSE_LABEL = "Browse for a .gis file on disk..."
+
+
+def _sibling_animations(viewer: "MeshViewer") -> list[tuple[str, int]]:
+    """
+    Find ``.gis`` entries sitting in the same NPK folder as the open mesh.
+
+    A mesh and the animations that drive it ship together: in the samples,
+    25 of 26 NPC meshes have a ``.gis`` in their own folder, and player
+    characters keep a shared library folder in the same NPK. So the file is
+    almost always already open, and there is no reason to make the user go
+    hunting for it on disk.
+
+    Returns:
+    - ``(entry name, row)`` pairs, sorted by name.
+    """
+    entry = viewer.get_file()
+    npk = get_npk_file()
+    if entry is None or npk is None:
+        return []
+
+    mesh_name = (getattr(entry, "filename", "") or "").replace("\\", "/")
+    folder = posixpath.dirname(mesh_name)
+
+    found = []
+    for row, index in enumerate(npk.indices):
+        name = (getattr(index, "filename", "") or "").replace("\\", "/")
+        if name.lower().endswith(".gis") and posixpath.dirname(name) == folder:
+            found.append((name, row))
+    return sorted(found)
+
+
+def _read_npk_entry(row: int) -> bytes | None:
+    """Read one NPK entry's bytes, loading it if the list has not yet."""
+    npk = get_npk_file()
+    if npk is None:
+        return None
+    entry = npk.entries.get(row)
+    if entry is None or not entry.data:
+        with open(npk.file_path, "rb") as handle:
+            npk.load_entry(row, handle)
+        entry = npk.entries.get(row)
+    return entry.data if entry is not None else None
+
+
 def _load_animation_clips(window, viewer: "MeshViewer"):
     """
-    Ask for a ``.gis`` file and convert its clips onto the loaded mesh.
+    Pick a ``.gis`` and convert its clips onto the loaded mesh.
 
-    Meshes reach the viewer as bytes out of an NPK, with no path to look
-    beside, so the animation file is chosen explicitly rather than guessed.
+    Prefers animation files sitting beside the mesh in the open NPK, and falls
+    back to a file dialog when there are none.
 
     Returns:
     - ``(clips, error)``. ``clips`` is None when the user cancelled.
     """
-    file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
-        window,
-        "Select the NeoX animation file for this mesh",
-        "",
-        "NeoX animation (*.gis);;All files (*)",
-    )
-    if not file_path:
-        return None, None
-
     mesh = viewer.render_widget.mesh_data
     if mesh is None:
         return None, "no mesh loaded"
 
-    try:
+    siblings = _sibling_animations(viewer)
+    payload: bytes | None = None
+    source_name = ""
+
+    if siblings:
+        labels = [name for name, _ in siblings] + [BROWSE_LABEL]
+        choice, accepted = QtWidgets.QInputDialog.getItem(
+            window,
+            "Choose an animation file",
+            f"{len(siblings)} animation file(s) found next to this mesh:",
+            labels,
+            0,
+            False,
+        )
+        if not accepted:
+            return None, None
+        if choice != BROWSE_LABEL:
+            row = dict(siblings)[choice]
+            payload = _read_npk_entry(row)
+            source_name = choice
+            if payload is None:
+                return None, f"could not read {choice} out of the open NPK"
+
+    if payload is None:
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            window,
+            "Select the NeoX animation file for this mesh",
+            "",
+            "NeoX animation (*.gis);;All files (*)",
+        )
+        if not file_path:
+            return None, None
         payload = Path(file_path).read_bytes()
+        source_name = Path(file_path).name
+
+    try:
         if not is_rgis(payload):
             return None, (
-                f"{Path(file_path).name} is not a NeoX RGIS animation file "
+                f"{source_name} is not a NeoX RGIS animation file "
                 f"(it starts with {payload[:4]!r})"
             )
         scene = build_scene(mesh.raw_data)
@@ -56,7 +128,7 @@ def _load_animation_clips(window, viewer: "MeshViewer"):
         rgis = read_rgis(payload)
         clips, notes = clips_from_rgis(rgis, scene.skeleton)
     except Exception as error:  # noqa: BLE001 - surfaced to the user verbatim
-        get_logger().exception("Failed to read animations from %s", file_path)
+        get_logger().exception("Failed to read animations from %s", source_name)
         return None, str(error) or error.__class__.__name__
 
     for name, reason in rgis.skipped:
