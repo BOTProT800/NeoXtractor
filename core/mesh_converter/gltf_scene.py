@@ -43,6 +43,11 @@ from typing import Any
 import numpy as np
 
 from core.logger import get_logger
+from core.mesh_converter.animation import (
+    AnimationClip,
+    make_quaternions_continuous,
+    normalize_quaternions,
+)
 from core.mesh_loader import MeshData
 from core.mesh_converter.skeleton import (
     NEOX_TO_GLTF,
@@ -375,6 +380,119 @@ def _prepare_influences(
     return _Influences(joints_out, weights_out, unskinned, diagnostics)
 
 
+def _write_animations(
+    animations: "list[AnimationClip]",
+    gltf: dict[str, Any],
+    accessors: list[dict[str, Any]],
+    buffers: _BufferBuilder,
+    skeleton: Skeleton,
+    bone_node_base: int,
+) -> list[str]:
+    """
+    Turn clips into glTF animations, appending to the document in place.
+
+    Each channel becomes one sampler plus one channel entry targeting the
+    bone's node. A bone written as a baked matrix cannot be animated -- glTF
+    channels only address translation, rotation and scale -- so that is an
+    error rather than a silently dropped track.
+
+    Returns:
+    - Diagnostics worth reporting.
+    """
+    diagnostics: list[str] = []
+    written: list[dict[str, Any]] = []
+    node_is_trs = {
+        index: "matrix" not in node for index, node in enumerate(gltf["nodes"])
+    }
+
+    for clip in animations:
+        problems = clip.validate()
+        if problems:
+            raise MeshExportError(
+                f"animation {clip.name!r} is not usable: " + "; ".join(problems[:6])
+            )
+
+        samplers: list[dict[str, Any]] = []
+        channels: list[dict[str, Any]] = []
+
+        for track in clip.tracks:
+            if track.bone < 0 or track.bone >= len(skeleton.bones):
+                raise MeshExportError(
+                    f"animation {clip.name!r} targets bone {track.bone}, "
+                    f"outside of [0, {len(skeleton.bones)})"
+                )
+            node_index = bone_node_base + track.bone
+            if not node_is_trs.get(node_index, False):
+                raise MeshExportError(
+                    f"animation {clip.name!r} targets bone "
+                    f"{skeleton.bones[track.bone].name!r}, whose rest transform had to "
+                    "be baked into a matrix. glTF can only animate "
+                    "translation/rotation/scale, so this bone cannot be animated as-is."
+                )
+
+            for path, times, values, components in track.channels():
+                times = np.asarray(times, dtype=np.float32)
+                values = np.asarray(values, dtype=np.float64)
+
+                if path == "rotation" and track.interpolation != "CUBICSPLINE":
+                    # Renormalise after the float64 maths and keep the signs
+                    # continuous, or a viewer interpolates the long way round.
+                    values = normalize_quaternions(values)
+                    values = make_quaternions_continuous(values)
+
+                # Spec: an animation sampler input accessor must declare
+                # min and max.
+                input_view = buffers.add_view(_pack(times, "f"))
+                input_accessor = len(accessors)
+                accessors.append(
+                    _accessor(
+                        input_view,
+                        COMPONENT_FLOAT,
+                        len(times),
+                        "SCALAR",
+                        minimum=[float(times.min())],
+                        maximum=[float(times.max())],
+                    )
+                )
+
+                output_view = buffers.add_view(
+                    _pack(values.astype(np.float32).reshape(-1), "f")
+                )
+                output_accessor = len(accessors)
+                accessors.append(
+                    _accessor(
+                        output_view,
+                        COMPONENT_FLOAT,
+                        len(values),
+                        "VEC4" if components == 4 else "VEC3",
+                    )
+                )
+
+                samplers.append(
+                    {
+                        "input": input_accessor,
+                        "output": output_accessor,
+                        "interpolation": track.interpolation,
+                    }
+                )
+                channels.append(
+                    {
+                        "sampler": len(samplers) - 1,
+                        "target": {"node": node_index, "path": path},
+                    }
+                )
+
+        written.append({"name": clip.name, "samplers": samplers, "channels": channels})
+        diagnostics.append(
+            f"animation {clip.name!r}: {len(clip.tracks)} bone track(s), "
+            f"{len(channels)} channel(s), {clip.duration:.4f}s"
+        )
+
+    if written:
+        gltf["animations"] = written
+    return diagnostics
+
+
 def build_scene(
     mesh: MeshData,
     *,
@@ -383,6 +501,7 @@ def build_scene(
     matrix_storage: MatrixStorage = MatrixStorage.AUTO,
     matrix_role: MatrixRole = MatrixRole.GLOBAL_BIND,
     use_trs_nodes: bool = True,
+    animations: "list[AnimationClip] | None" = None,
 ) -> GLTFScene:
     """
     Build a glTF scene from parsed mesh data.
@@ -396,6 +515,7 @@ def build_scene(
     - use_trs_nodes: write bone nodes as translation/rotation/scale, which is
       what glTF requires for animated nodes. Bones whose local transform TRS
       cannot reproduce fall back to a baked matrix regardless.
+    - animations: clips to attach, see :mod:`core.mesh_converter.animation`.
 
     Returns:
     - A :class:`GLTFScene` holding the JSON structure and the binary blob.
@@ -483,6 +603,7 @@ def build_scene(
     skeleton: Skeleton | None = None
     bone_to_slot: dict[int, int] = {}
     slot_to_node: list[int] = []
+    bone_node_base = 2
 
     if mesh.has_bones and mesh.bones.names:
         rig_problems = mesh.validate_rig()
@@ -509,7 +630,6 @@ def build_scene(
         # whenever a parent appeared after its child in the file, which the
         # parser's own trailing `dummy_root` guarantees.
         armature_node_index = 1
-        bone_node_base = 2
 
         # Joint slots follow the file's bone order, so a JOINTS value read from
         # the file is also its slot. The maps are kept anyway: a future
@@ -617,6 +737,17 @@ def build_scene(
                 }
             ]
             mesh_node["skin"] = 0
+
+    if animations:
+        if skeleton is None:
+            raise MeshExportError(
+                "animations were supplied but the mesh carries no usable skeleton"
+            )
+        diagnostics.extend(
+            _write_animations(
+                animations, gltf, accessors, buffers, skeleton, bone_node_base
+            )
+        )
 
     for note in diagnostics:
         logger.info("GLTF: %s", note)

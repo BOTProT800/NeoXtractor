@@ -58,6 +58,116 @@ def check_gltf(document: ParsedGLTF) -> list[str]:
     problems += _check_meshes(gltf, document)
     problems += _check_skins(gltf, document)
     problems += _check_scenes(gltf)
+    problems += _check_animations(gltf, document)
+    return problems
+
+
+def _check_animations(gltf: dict, document: ParsedGLTF) -> list[str]:
+    problems: list[str] = []
+    nodes = gltf.get("nodes", [])
+    accessors = gltf.get("accessors", [])
+
+    for index, animation in enumerate(gltf.get("animations", [])):
+        where = f"animation {index}"
+        samplers = animation.get("samplers", [])
+        channels = animation.get("channels", [])
+        if not samplers:
+            problems.append(f"{where} has no samplers")
+        if not channels:
+            problems.append(f"{where} has no channels")
+
+        for sampler_index, sampler in enumerate(samplers):
+            label = f"{where} sampler {sampler_index}"
+            interpolation = sampler.get("interpolation", "LINEAR")
+            if interpolation not in ("LINEAR", "STEP", "CUBICSPLINE"):
+                problems.append(f"{label} has unknown interpolation {interpolation!r}")
+
+            input_index = sampler.get("input")
+            output_index = sampler.get("output")
+            if input_index is None or input_index >= len(accessors):
+                problems.append(f"{label} refers to a missing input accessor")
+                continue
+            if output_index is None or output_index >= len(accessors):
+                problems.append(f"{label} refers to a missing output accessor")
+                continue
+
+            input_accessor = accessors[input_index]
+            if input_accessor["type"] != "SCALAR" or input_accessor[
+                "componentType"
+            ] != 5126:
+                problems.append(f"{label} input must be a float SCALAR accessor")
+            # Spec: animation sampler input accessors MUST have min and max.
+            if "min" not in input_accessor or "max" not in input_accessor:
+                problems.append(f"{label} input accessor must declare min and max")
+
+            times = document.accessor(input_index).astype(np.float64)
+            if len(times) and float(times.min()) < 0.0:
+                problems.append(f"{label} has a negative sample time")
+            if len(times) > 1 and not np.all(np.diff(times) > 0.0):
+                problems.append(f"{label} sample times do not strictly increase")
+            if "min" in input_accessor and len(times):
+                if not np.isclose(input_accessor["min"][0], times.min(), atol=1e-6):
+                    problems.append(f"{label} input min does not match the data")
+                if not np.isclose(input_accessor["max"][0], times.max(), atol=1e-6):
+                    problems.append(f"{label} input max does not match the data")
+
+            output_accessor = accessors[output_index]
+            expected = len(times) * (3 if interpolation == "CUBICSPLINE" else 1)
+            if output_accessor["count"] != expected:
+                problems.append(
+                    f"{label} has {len(times)} input samples but "
+                    f"{output_accessor['count']} output elements "
+                    f"(expected {expected} for {interpolation})"
+                )
+
+        seen_targets: set[tuple[int, str]] = set()
+        for channel_index, channel in enumerate(channels):
+            label = f"{where} channel {channel_index}"
+            sampler_index = channel.get("sampler")
+            if sampler_index is None or sampler_index >= len(samplers):
+                problems.append(f"{label} refers to a missing sampler")
+                continue
+            target = channel.get("target", {})
+            path = target.get("path")
+            if path not in ("translation", "rotation", "scale", "weights"):
+                problems.append(f"{label} has unknown target path {path!r}")
+                continue
+            node_index = target.get("node")
+            if node_index is None:
+                continue
+            if node_index >= len(nodes):
+                problems.append(f"{label} targets missing node {node_index}")
+                continue
+            # Spec: a node targeted by an animation MUST NOT be defined by a
+            # matrix, because only TRS components can be animated.
+            if path in ("translation", "rotation", "scale") and "matrix" in nodes[
+                node_index
+            ]:
+                problems.append(
+                    f"{label} targets node {node_index}, which uses a baked matrix"
+                )
+            key = (node_index, path)
+            if key in seen_targets:
+                problems.append(
+                    f"{label} is the second channel targeting node {node_index} {path}"
+                )
+            seen_targets.add(key)
+
+            sampler = samplers[sampler_index]
+            output_accessor = accessors[sampler["output"]]
+            if path == "rotation":
+                if output_accessor["type"] != "VEC4":
+                    problems.append(f"{label} rotation output must be VEC4")
+                elif sampler.get("interpolation", "LINEAR") != "CUBICSPLINE":
+                    values = document.accessor(sampler["output"]).astype(np.float64)
+                    lengths = np.linalg.norm(values, axis=1)
+                    if not np.allclose(lengths, 1.0, atol=1e-4):
+                        problems.append(
+                            f"{label} has rotation samples that are not unit quaternions"
+                        )
+            elif path in ("translation", "scale") and output_accessor["type"] != "VEC3":
+                problems.append(f"{label} {path} output must be VEC3")
+
     return problems
 
 

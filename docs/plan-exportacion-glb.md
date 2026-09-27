@@ -107,7 +107,7 @@ Se rechaza la exportación, en lugar de disimularla: peso positivo sobre un cent
 
 **Comprobaciones ejecutadas.**
 
-Suite de regresión en `tests/`, 124 pruebas, ejecutada con `pytest 9.1.1` sobre Python 3.13.5 del entorno `.venv`. Sin Blender instalado quedan 119 pruebas y 5 saltadas, que es como corre en CI:
+Suite de regresión en `tests/`, 153 pruebas, ejecutada con `pytest 9.1.1` sobre Python 3.13.5 del entorno `.venv`. Sin Blender instalado quedan 147 pruebas y 6 saltadas, que es como corre en CI:
 
 ```
 tests/support/synthetic.py        fixtures: blobs .mesh byte a byte y MeshData
@@ -121,7 +121,8 @@ tests/test_glb_container.py       12 pruebas del contenedor y del ida y vuelta
 tests/test_skinning_deformation.py 13 pruebas de deformación
 tests/test_save_integration.py     4 pruebas del guardado desde la interfaz
 tests/test_other_exporters.py     24 pruebas de ASCII, PMX y SMD
-tests/test_blender_import.py       5 pruebas de importación real en Blender
+tests/test_animation.py           28 pruebas del escritor de animaciones
+tests/test_blender_import.py       6 pruebas de importación real en Blender
 tests/support/blender_check.py     verificador ejecutable sobre cualquier .glb
 ```
 
@@ -292,11 +293,21 @@ Los diagnósticos —disposición detectada y por qué, papel declarado, convers
 
 La primera meta deja preparado lo que la segunda necesita: identidad de hueso de origen y nombre original conservados en `SkeletonBone`, TRS locales verificados por recomposición en cada nodo de hueso, y un diagnóstico explícito para los huesos cuya transformación no es reproducible por TRS y que por tanto no son animables tal cual.
 
-1. **Resolver la relación entre recursos.** Con muestras del juego elegido, determinar qué archivo contiene el esqueleto y cuáles contienen clips, y cómo se vinculan al modelo. Investigar nombres originales, índices, hashes o paletas reales; no asumir que dos listas de huesos coinciden por orden.
+1. **Resolver la relación entre recursos.** *Pendiente, bloqueado por falta de muestras.* Con clips del juego, determinar qué archivo contiene el esqueleto y cuáles los clips, y cómo se vinculan al modelo. Investigar nombres originales, índices, hashes o paletas reales; no asumir que dos listas de huesos coinciden por orden. `core/npk/detection.py` ya reconoce varias firmas candidatas —`RAWANIMA` (`cpdanimation`), `SKELETON`, `ags`, y un patrón de bytes que marca `animation`— pero **ninguna tiene lector**. Lo del visor Cocos es flatbuffers 2D de otro flujo, no sirve. `tiejiayong_03.mesh` no lleva datos de animación: el parser consume 192 176 de sus 192 192 bytes y los 16 restantes son la tabla de índices.
 
-2. **Crear un lector y representación de clips.** Incorporar duración, tiempos en segundos, canales por hueso, traslación, rotación y escala, y modo de interpolación. Establecer si las pistas son transformaciones absolutas, relativas o aditivas, y si están en espacio local o global. Conservar la identidad de hueso definida en la primera meta.
+2. **Crear un lector y representación de clips.** *Representación hecha, lector pendiente.* `core/mesh_converter/animation.py` define `AnimationClip` y `BoneTrack` con duración, tiempos en segundos, canales independientes de traslación, rotación y escala, y modo de interpolación. Las pistas direccionan huesos por **índice de origen**, la misma identidad que usa el resto del pipeline, así que un lector NeoX solo tiene que resolver su propio nombrado sobre ese índice; nunca necesita saber de nodos glTF ni de ranuras de joint. Los valores son transformaciones locales **absolutas**, no incrementos, porque un canal glTF sustituye el TRS del nodo en vez de sumarse a él. Queda por establecer, con muestras reales, si las pistas NeoX son absolutas, relativas o aditivas, y en qué espacio.
 
-3. **Exportar un primer clip controlado.** Comenzar con una rotación sintética de un hueso sobre el GLB validado para probar el escritor de animaciones independientemente del lector NeoX. Después exportar un clip real sencillo. Generar samplers y canales sobre nodos TRS, comprobando tiempos, normalización y continuidad de cuaterniones. [Modelo de animaciones de Khronos](https://github.khronos.org/glTF-Tutorials/gltfTutorial/gltfTutorial_007_Animations.html).
+3. **Exportar un primer clip controlado.** *Hecho.* `build_scene(..., animations=[...])` genera samplers y canales sobre nodos TRS, compartidos por `.gltf` y `.glb` igual que el resto de la escena. Comprobado con 28 pruebas y en Blender:
+
+   - Los tiempos van en segundos y los accessors de entrada declaran `min` y `max`, como exige la especificación.
+   - Los cuaterniones se renormalizan y se les corrige el signo para que los pasos consecutivos tengan producto escalar no negativo; sin eso un visor interpola por el camino largo y el hueso gira al revés a mitad. Probado con un giro de 340°.
+   - Un clip cuyo primer keyframe es la orientación de reposo no mueve nada, que es la prueba de que se escriben transformaciones absolutas y no incrementos.
+   - La pose animada en un keyframe coincide con posar ese hueso a mano; a mitad de un giro de 0 a 90° la malla está donde estaría a 45°.
+   - Solo se mueve el subárbol animado; los valores se recortan fuera del rango muestreado; `STEP` mantiene su valor.
+   - Un hueso cuya transformación de reposo tuvo que hornearse en matriz **no puede animarse** y la exportación falla diciéndolo, en vez de escribir un canal que el visor ignoraría.
+   - Sobre el modelo real: Blender importa la acción `test_bend`, la malla se desplaza 5.23 unidades a mitad del clip, 2.57 a un cuarto —interpola en rampa, no a saltos— y vuelve **exactamente** a reposo al final.
+
+   Falta exportar un clip real sencillo, que depende del punto 1. [Modelo de animaciones de Khronos](https://github.khronos.org/glTF-Tutorials/gltfTutorial/gltfTutorial_007_Animations.html).
 
 4. **Validar y ampliar por evidencia.** Comparar posiciones/orientaciones en varios instantes con una referencia confiable, revisar interpolación y bucles, y definir el tratamiento del movimiento de la raíz. Incorporar varios clips y variantes de compresión solamente cuando sus formatos estén identificados.
 

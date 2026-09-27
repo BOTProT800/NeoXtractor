@@ -141,3 +141,28 @@ def test_blender_imports_and_deforms_the_rig(name, factory, tmp_path):
     vertices of its subtree and nothing else.
     """
     run_blender_check(glb.convert(factory()), tmp_path, name)
+
+
+@blender_python
+def test_blender_imports_and_plays_an_animation(tmp_path):
+    """
+    A clip survives the round trip and moves the rig inside Blender.
+
+    The checker confirms the action is imported, that sampling it partway
+    through actually displaces the mesh, that the displacement ramps rather
+    than jumping, and that every animated node is a joint of the skin.
+    """
+    from core.mesh_converter.animation import rotation_clip
+    from core.mesh_converter.gltf_scene import build_scene
+
+    mesh = asymmetric_character()
+    skeleton = build_scene(mesh).skeleton
+    clip = rotation_clip(
+        skeleton,
+        bone=1,
+        axis="z",
+        degrees_over_time=[(0.0, 0.0), (0.5, 60.0), (1.0, 0.0)],
+        name="bend",
+    )
+
+    run_blender_check(glb.convert(mesh, animations=[clip]), tmp_path, "animated")

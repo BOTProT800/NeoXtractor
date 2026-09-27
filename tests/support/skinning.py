@@ -161,6 +161,103 @@ def skin_vertices(
     return result
 
 
+def animation_overrides(
+    document: ParsedGLTF, animation_index: int, time: float
+) -> dict[int, np.ndarray]:
+    """
+    Evaluate an animation at one instant, straight from the file.
+
+    Rebuilds each animated node's local transform by sampling the channels the
+    way the specification says: values are clamped outside the sampled range,
+    LINEAR interpolates (spherically, for rotations), STEP holds. Channels the
+    animation does not touch keep the node's own TRS.
+
+    Parameters:
+    - document: a parsed glTF or GLB file.
+    - animation_index: which animation to evaluate.
+    - time: instant in seconds.
+
+    Returns:
+    - node index -> local transform, ready for :func:`global_node_matrices`.
+    """
+    gltf = document.json_data
+    animation = gltf["animations"][animation_index]
+    nodes = gltf["nodes"]
+
+    # Start from each animated node's rest components.
+    components: dict[int, dict[str, np.ndarray]] = {}
+    for channel in animation["channels"]:
+        node_index = channel["target"].get("node")
+        if node_index is None:
+            continue
+        if node_index not in components:
+            node = nodes[node_index]
+            components[node_index] = {
+                "translation": np.asarray(
+                    node.get("translation", [0.0, 0.0, 0.0]), dtype=np.float64
+                ),
+                "rotation": np.asarray(
+                    node.get("rotation", [0.0, 0.0, 0.0, 1.0]), dtype=np.float64
+                ),
+                "scale": np.asarray(node.get("scale", [1.0, 1.0, 1.0]), dtype=np.float64),
+            }
+
+    for channel in animation["channels"]:
+        node_index = channel["target"].get("node")
+        path = channel["target"]["path"]
+        if node_index is None or path == "weights":
+            continue
+        sampler = animation["samplers"][channel["sampler"]]
+        interpolation = sampler.get("interpolation", "LINEAR")
+        times = document.accessor(sampler["input"]).astype(np.float64)
+        values = document.accessor(sampler["output"]).astype(np.float64)
+
+        if time <= times[0]:
+            sampled = values[0]
+        elif time >= times[-1]:
+            sampled = values[-1]
+        else:
+            upper = int(np.searchsorted(times, time))
+            lower = upper - 1
+            if interpolation == "STEP":
+                sampled = values[lower]
+            else:
+                span = times[upper] - times[lower]
+                ratio = 0.0 if span <= 0.0 else (time - times[lower]) / span
+                if path == "rotation":
+                    sampled = _slerp(values[lower], values[upper], ratio)
+                else:
+                    sampled = values[lower] * (1.0 - ratio) + values[upper] * ratio
+        components[node_index][path] = np.asarray(sampled, dtype=np.float64)
+
+    overrides: dict[int, np.ndarray] = {}
+    for node_index, parts in components.items():
+        matrix = np.identity(4)
+        matrix[:3, :3] = quaternion_to_matrix(parts["rotation"]) * parts["scale"]
+        matrix[:3, 3] = parts["translation"]
+        overrides[node_index] = matrix
+    return overrides
+
+
+def _slerp(start, end, ratio: float) -> np.ndarray:
+    """Spherical interpolation between two quaternions, taking the short way."""
+    a = np.asarray(start, dtype=np.float64)
+    b = np.asarray(end, dtype=np.float64)
+    dot = float(np.dot(a, b))
+    if dot < 0.0:
+        b = -b
+        dot = -dot
+    if dot > 1.0 - 1e-9:
+        result = a + (b - a) * ratio
+        return result / np.linalg.norm(result)
+    theta = np.arccos(np.clip(dot, -1.0, 1.0))
+    sin_theta = np.sin(theta)
+    return (
+        a * float(np.sin((1.0 - ratio) * theta) / sin_theta)
+        + b * float(np.sin(ratio * theta) / sin_theta)
+    )
+
+
 def rotation_override(
     node: dict, angle_degrees: float, axis: str = "z"
 ) -> np.ndarray:

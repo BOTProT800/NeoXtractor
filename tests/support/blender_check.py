@@ -77,6 +77,27 @@ def main(glb_path: str) -> int:
     armature_object = armatures[0]
     armature = armature_object.data
 
+    def unpose():
+        """
+        Drop any imported action so the rig sits at its rest pose.
+
+        With an action linked, Blender evaluates the armature at the current
+        frame, so the "rest" geometry would already be animated and every
+        pose comparison below would be measured against a moving target.
+        Clearing the action is not enough on its own: the pose bones keep
+        whatever values the last evaluation left in them, so their basis has
+        to be reset too.
+        """
+        for obj in bpy.data.objects:
+            if obj.animation_data:
+                obj.animation_data_clear()
+            if obj.type == "ARMATURE":
+                for pose_bone in obj.pose.bones:
+                    pose_bone.matrix_basis = Matrix()
+        bpy.context.view_layer.update()
+
+    unpose()
+
     modifiers = [m for m in mesh_object.modifiers if m.type == "ARMATURE"]
     check(
         "the armature modifier points at the imported armature",
@@ -260,6 +281,13 @@ def main(glb_path: str) -> int:
             if o.type == "MESH" and any(m.type == "ARMATURE" for m in o.modifiers)
         ][0]
         armature_object = [o for o in bpy.data.objects if o.type == "ARMATURE"][0]
+        for obj in bpy.data.objects:
+            if obj.animation_data:
+                obj.animation_data_clear()
+            if obj.type == "ARMATURE":
+                for pose_bone in obj.pose.bones:
+                    pose_bone.matrix_basis = Matrix()
+        bpy.context.view_layer.update()
         group_name = {group.index: group.name for group in mesh_object.vertex_groups}
         rest_now = evaluated_positions()
 
@@ -319,6 +347,73 @@ def main(glb_path: str) -> int:
 
         any_moved = np.abs(posed - rest_now).max() > tolerance
         check(f"rotating {target} deformed something", bool(any_moved))
+
+    # --- animations ----------------------------------------------------------
+    if gltf.get("animations"):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        bpy.ops.import_scene.gltf(filepath=glb_path)
+        mesh_object = [
+            o
+            for o in bpy.data.objects
+            if o.type == "MESH" and any(m.type == "ARMATURE" for m in o.modifiers)
+        ][0]
+
+        expected_names = [clip.get("name") for clip in gltf["animations"]]
+        actions = list(bpy.data.actions)
+        check(
+            "every animation was imported as an action",
+            len(actions) == len(expected_names),
+            f"{[a.name for a in actions]} vs {expected_names}",
+        )
+
+        scene = bpy.context.scene
+        fps = scene.render.fps
+
+        def at(seconds):
+            scene.frame_set(int(round(seconds * fps)))
+            bpy.context.view_layer.update()
+            return evaluated_positions()
+
+        # Sample the first clip across its own duration.
+        first = gltf["animations"][0]
+        duration = 0.0
+        for sampler in first["samplers"]:
+            times = document.accessor(sampler["input"]).astype(np.float64)
+            duration = max(duration, float(times.max()))
+        check("the first animation has a non-zero duration", duration > 0.0)
+
+        if duration > 0.0:
+            start = at(0.0)
+            middle = at(duration * 0.5)
+            quarter = at(duration * 0.25)
+
+            moved = float(np.abs(middle - start).max())
+            check(
+                "the animation actually deforms the mesh",
+                moved > tolerance * 10.0,
+                f"largest displacement {moved:.4f}",
+            )
+            partial = float(np.abs(quarter - start).max())
+            check(
+                "interpolation ramps rather than jumping",
+                0.0 < partial < moved or moved == 0.0,
+                f"quarter {partial:.4f} vs half {moved:.4f}",
+            )
+
+            # Every animated bone must be one the skin actually uses.
+            animated = {
+                gltf["nodes"][channel["target"]["node"]].get("name")
+                for channel in first["channels"]
+                if channel["target"].get("node") is not None
+            }
+            joint_names = {
+                gltf["nodes"][node].get("name") for node in skin["joints"]
+            }
+            check(
+                "animated nodes are joints of the skin",
+                animated <= joint_names,
+                f"not joints: {sorted(animated - joint_names)}",
+            )
 
     print(f"RESULT {'ok' if not FAILURES else 'failed: ' + ', '.join(FAILURES)}")
     return 0 if not FAILURES else 1
