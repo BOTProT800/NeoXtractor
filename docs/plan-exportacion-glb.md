@@ -122,6 +122,7 @@ tests/test_skinning_deformation.py 13 pruebas de deformación
 tests/test_save_integration.py     4 pruebas del guardado desde la interfaz
 tests/test_other_exporters.py     24 pruebas de ASCII, PMX y SMD
 tests/test_animation.py           28 pruebas del escritor de animaciones
+tests/test_rgis.py                18 pruebas del lector RGIS y su puente
 tests/test_blender_import.py       6 pruebas de importación real en Blender
 tests/support/blender_check.py     verificador ejecutable sobre cualquier .glb
 ```
@@ -293,24 +294,69 @@ Los diagnósticos —disposición detectada y por qué, papel declarado, convers
 
 La primera meta deja preparado lo que la segunda necesita: identidad de hueso de origen y nombre original conservados en `SkeletonBone`, TRS locales verificados por recomposición en cada nodo de hueso, y un diagnóstico explícito para los huesos cuya transformación no es reproducible por TRS y que por tanto no son animables tal cual.
 
-1. **Resolver la relación entre recursos.** *Pendiente, bloqueado por falta de muestras.* Con clips del juego, determinar qué archivo contiene el esqueleto y cuáles los clips, y cómo se vinculan al modelo. Investigar nombres originales, índices, hashes o paletas reales; no asumir que dos listas de huesos coinciden por orden. `core/npk/detection.py` ya reconoce varias firmas candidatas —`RAWANIMA` (`cpdanimation`), `SKELETON`, `ags`, y un patrón de bytes que marca `animation`— pero **ninguna tiene lector**. Lo del visor Cocos es flatbuffers 2D de otro flujo, no sirve. `tiejiayong_03.mesh` no lleva datos de animación: el parser consume 192 176 de sus 192 192 bytes y los 16 restantes son la tabla de índices.
+1. **Resolver la relación entre recursos.** *Hecho, con muestras de Cyber Hunter (`E:\Instaladores\Main\Cyber Hunter`).* Los clips **no** viven en el `.mesh`: se comprobó instrumentando el parser, que lee 158 346 bytes y **salta 33 836** con seeks hacia adelante; esos bloques saltados son 14 huesos × 28 B (volúmenes por hueso) y 2787 vértices × 12 B (probablemente tangentes). Ambos dividen exacto por conteos estáticos, así que no hay sitio para una dimensión temporal.
 
-2. **Crear un lector y representación de clips.** *Representación hecha, lector pendiente.* `core/mesh_converter/animation.py` define `AnimationClip` y `BoneTrack` con duración, tiempos en segundos, canales independientes de traslación, rotación y escala, y modo de interpolación. Las pistas direccionan huesos por **índice de origen**, la misma identidad que usa el resto del pipeline, así que un lector NeoX solo tiene que resolver su propio nombrado sobre ese índice; nunca necesita saber de nodos glTF ni de ranuras de joint. Los valores son transformaciones locales **absolutas**, no incrementos, porque un canal glTF sustituye el TRS del nodo en vez de sumarse a él. Queda por establecer, con muestras reales, si las pistas NeoX son absolutas, relativas o aditivas, y en qué espacio.
+   El reparto real, en `res/character/*.npk`:
 
-3. **Exportar un primer clip controlado.** *Hecho.* `build_scene(..., animations=[...])` genera samplers y canales sobre nodos TRS, compartidos por `.gltf` y `.glb` igual que el resto de la escena. Comprobado con 28 pruebas y en Blender:
+   | Extensión | Contenido |
+   | --- | --- |
+   | `.mesh` | geometría y esqueleto en reposo |
+   | **`.gis`** | **contenedor de animación, magic `RGIS`** |
+   | `.ags` | XML: `<InitPlayAnim AnimName="stand"/>` y pistas de eventos |
+   | `.gim` | XML: configuración del modelo |
 
-   - Los tiempos van en segundos y los accessors de entrada declaran `min` y `max`, como exige la especificación.
-   - Los cuaterniones se renormalizan y se les corrige el signo para que los pasos consecutivos tengan producto escalar no negativo; sin eso un visor interpola por el camino largo y el hueso gira al revés a mitad. Probado con un giro de 340°.
-   - Un clip cuyo primer keyframe es la orientación de reposo no mueve nada, que es la prueba de que se escriben transformaciones absolutas y no incrementos.
-   - La pose animada en un keyframe coincide con posar ese hueso a mano; a mitad de un giro de 0 a 90° la malla está donde estaría a 45°.
-   - Solo se mueve el subárbol animado; los valores se recortan fuera del rango muestreado; `STEP` mantiene su valor.
-   - Un hueso cuya transformación de reposo tuvo que hornearse en matriz **no puede animarse** y la exportación falla diciéndolo, en vez de escribir un canal que el visor ignoraría.
-   - Sobre el modelo real: Blender importa la acción `test_bend`, la malla se desplaza 5.23 unidades a mitad del clip, 2.57 a un cuarto —interpola en rampa, no a saltos— y vuelve **exactamente** a reposo al final.
+   **Los huesos se enlazan por nombre, no por índice**, y cada clip anima un subconjunto en su propio orden. `jianzao_dunpai.mesh` tiene 14 huesos y el primer clip de su `.gis` dirige 10, todos presentes en la malla y ninguno sobrante. Un puente por posición animaría la extremidad equivocada.
 
-   Falta exportar un clip real sencillo, que depende del punto 1. [Modelo de animaciones de Khronos](https://github.khronos.org/glTF-Tutorials/gltfTutorial/gltfTutorial_007_Animations.html).
+2. **Crear un lector y representación de clips.** *Hecho.* `core/anim_loader/rgis.py` lee el formato, documentado en su propio docstring:
+
+   ```
+   "RGIS" | u16 versión | u16 desconocido | u16 nº clips | u32 nº huesos de referencia
+   char[32] × huesos                nombres
+   float[10] × huesos               pose de referencia: T(3) Q(4) S(3)
+   u32 0
+   por clip:
+     char[32] nombre | char[32] vacío | char[32] raíz | u16 nº huesos
+     char[32] × huesos
+     u16[8] cabecera   ([0]=fps, [6]=flag de layout, [7]=nº keyframes)
+     float × keys      tiempos en MILISEGUNDOS
+     por hueso:
+       u8 t_anim, u8 r_anim, u8 s_anim, u8 relleno
+       vec3 float32 × (keys si animado, si no 1)
+       quat float32 × (keys si animado, si no 1)     orden (x, y, z, w)
+       vec3 float16 × (keys si animado, si no 1)     escala en media precisión
+     u8 0
+   ```
+
+   Dos cosas se decidieron **contra el `.mesh`**, no por suposición, porque equivocarse en cualquiera produce un rig que parece plausible y anima mal:
+
+   - **Las transformaciones son relativas al padre.** Error total de traslación de la pose de referencia contra `jianzao_dunpai.mesh`: `2.68` leída como local frente a `87.28` como global, con 6 de sus 10 huesos coincidiendo *exactamente*.
+   - **Los cuaterniones son `(x, y, z, w)`.** Con ese orden 6 huesos reproducen la rotación local del mesh exactamente; con `(w, x, y, z)`, ninguno.
+
+   La pose de referencia del `.gis` **no** equivale al bind pose del `.mesh` —4 de 10 huesos difieren, todos mitades de pares izquierda/derecha—, así que se conserva solo para diagnóstico y el skin sigue saliendo del `.mesh`.
+
+   Validación: el lector recorre `jianzao_dunpai.gis` y `jianzao_huojian.gis` **byte a byte hasta el último**, 25 clips, 3042 cuaterniones todos unitarios. Los tiempos salen `0, 33.333, 66.667…` = exactamente 30 fps.
+
+   `clips_from_rgis` en `core/mesh_converter/animation.py` hace el puente: resuelve huesos por nombre, convierte ms a segundos, aplica la conversión de coordenadas del esqueleto como `C @ L @ inverse(C)` para que la animación caiga en el mismo espacio que la geometría, y omite los canales constantes porque equivalen al reposo del nodo.
+
+3. **Exportar un primer clip controlado.** *Hecho, con clips reales del juego.* `build_scene(..., animations=[...])` genera samplers y canales sobre nodos TRS, compartidos por `.gltf` y `.glb`. Comprobado con 28 pruebas sintéticas y 18 del lector RGIS, y sobre el modelo real:
+
+   - `jianzao_dunpai.mesh` + `jianzao_dunpai.gis` exportan **los 22 clips del juego** (`stand`, `idle`, `walk_f`, `crouch`, `jump_*`, `turn90_*`…) en un solo GLB.
+   - Blender 4.5.14 importa las 22 acciones con sus nombres, la malla se deforma 0.527 unidades a mitad del clip y 0.343 a un cuarto —rampa, no salto— y los grupos de vértices reproducen las influencias exportadas.
+   - Los tiempos, la normalización de cuaterniones y su continuidad de signo se comprueban en el archivo exportado.
+
+   [Modelo de animaciones de Khronos](https://github.khronos.org/glTF-Tutorials/gltfTutorial/gltfTutorial_007_Animations.html).
 
 4. **Validar y ampliar por evidencia.** Comparar posiciones/orientaciones en varios instantes con una referencia confiable, revisar interpolación y bucles, y definir el tratamiento del movimiento de la raíz. Incorporar varios clips y variantes de compresión solamente cuando sus formatos estén identificados.
 
-La segunda meta se cierra cuando al menos un clip real del juego objetivo reproduce el movimiento esperado sobre el mismo rig, sin modificar sus pesos ni su pose de enlace para compensar errores.
+La segunda meta se cierra cuando al menos un clip real del juego objetivo reproduce el movimiento esperado sobre el mismo rig, sin modificar sus pesos ni su pose de enlace para compensar errores. **Los 22 clips de `jianzao_dunpai` se exportan y se reproducen en Blender sin tocar pesos ni bind pose**, así que esa condición está cumplida para la variante verificada. Lo que queda es el punto 4 y la variante de layout no descifrada.
+
+**Limitación conocida del lector RGIS.** Un clip de los 35 muestreados (`walk_f` en `jianzao_guanmu.gis`) lleva `cabecera[6] = 0x0104` en vez de `0x0004` y almacena **un array de tiempos por hueso** antes de los canales. Su layout no está resuelto: al leer la cabecera de canales que sigue a esos tiempos me desalineo por 2 bytes. Esos clips se saltan con su causa registrada en `RGISFile.skipped`, en vez de producir datos plausibles pero falsos. Afecta a 9 de los 18 clips de ese archivo y a ninguno de los otros dos.
+
+**Cómo exportar animaciones.**
+
+```
+uv run python tools/diagnose_mesh.py modelo.mesh --anim modelo.gis
+uv run python tools/diagnose_mesh.py modelo.mesh --anim modelo.gis --clips walk_f,idle
+```
 
 El siguiente paso concreto es obtener la muestra afectada y contrastar con ella la convención declarada; el resto de la primera meta está implementado y cubierto por regresiones.

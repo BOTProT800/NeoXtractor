@@ -14,6 +14,8 @@ interpreted, and whether anything was dropped.
 Options::
 
     --out PATH            write the .glb somewhere else
+    --anim FILE.gis       attach animation clips, matched by bone name
+    --clips a,b,c         only these clips
     --storage {auto,row_vector,column_vector}
     --role {global_bind,inverse_bind,local_bind}
     --conversion {neox_flip_x,identity}
@@ -34,6 +36,8 @@ if str(REPO_ROOT) not in sys.path:
 
 import numpy as np  # noqa: E402
 
+from core.anim_loader import is_rgis, read_rgis  # noqa: E402
+from core.mesh_converter.animation import clips_from_rgis  # noqa: E402
 from core.mesh_converter.formats import glb  # noqa: E402
 from core.mesh_converter.gltf_scene import build_scene  # noqa: E402
 from core.mesh_converter.skeleton import (  # noqa: E402
@@ -72,6 +76,14 @@ def main() -> int:
         "--conversion", choices=sorted(CONVERSIONS), default="neox_flip_x"
     )
     parser.add_argument("--no-trs", action="store_true")
+    parser.add_argument(
+        "--anim",
+        help="a .gis animation container to attach (bones are matched by name)",
+    )
+    parser.add_argument(
+        "--clips",
+        help="comma separated clip names to include; default is all of them",
+    )
     args = parser.parse_args()
 
     source = Path(args.mesh)
@@ -159,6 +171,33 @@ def main() -> int:
         print(f"  - {note}")
     print(f"  skin attached      {scene.is_skinned}")
     print(f"  joints in palette  {len(scene.slot_to_node)}")
+
+    clips = []
+    if args.anim:
+        heading("Animation")
+        animation_path = Path(args.anim)
+        payload = animation_path.read_bytes()
+        if not is_rgis(payload):
+            print(f"  {animation_path} is not an RGIS container "
+                  f"(magic {payload[:4]!r}); skipped")
+        elif scene.skeleton is None:
+            print("  the mesh has no usable skeleton, so clips cannot be attached")
+        else:
+            rgis = read_rgis(payload)
+            print(f"  file      {animation_path.name}  version {rgis.version}")
+            print(f"  reference {len(rgis.reference_names)} bones")
+            print(f"  clips     {len(rgis.clips)} read, {len(rgis.skipped)} skipped")
+            for name, reason in rgis.skipped:
+                print(f"    SKIPPED {name}: {reason}")
+
+            wanted = args.clips.split(",") if args.clips else None
+            clips, notes = clips_from_rgis(rgis, scene.skeleton, only=wanted)
+            for note in notes:
+                print(f"    - {note}")
+            for clip in clips:
+                print(f"    {clip.name:<20} tracks={len(clip.tracks):<3} "
+                      f"{clip.duration:.3f}s")
+            options["animations"] = clips
 
     destination = Path(args.out) if args.out else source.with_suffix(".glb")
     destination.write_bytes(glb.convert(mesh, **options))

@@ -340,3 +340,80 @@ def asymmetric_character(joint_index_bits: int = 8) -> MeshData:
         joint_index_bits=joint_index_bits,
         mesh_type=5 if joint_index_bits == 16 else 4,
     )
+
+
+def build_rgis_file(
+    *,
+    reference,
+    clips,
+    version: int = 2,
+    unknown: int = 774,
+) -> bytes:
+    """
+    Serialise an RGIS animation container the real reader can parse.
+
+    Parameters:
+    - reference: list of ``(name, translation, rotation_xyzw, scale)``.
+    - clips: list of dicts with ``name``, ``fps``, ``times`` (seconds),
+      ``tracks`` and optionally ``layout_flag`` and ``root``. Each track is
+      ``(bone_name, translation, rotation, scale)`` where a channel is either a
+      single value (constant) or one value per key (animated).
+
+    Returns:
+    - The bytes of a ``.gis`` file.
+    """
+
+    def name_field(text: str) -> bytes:
+        encoded = text.encode("ascii")
+        if len(encoded) > 31:
+            raise ValueError(f"name {text!r} does not fit in 32 bytes")
+        return encoded + b"\x00" * (32 - len(encoded))
+
+    out = bytearray(b"RGIS")
+    out += struct.pack("<HHHI", version, unknown, len(clips), len(reference))
+    for entry in reference:
+        out += name_field(entry[0])
+    for _, translation, rotation, scale in reference:
+        out += struct.pack("<10f", *translation, *rotation, *scale)
+    out += struct.pack("<I", 0)
+
+    for clip in clips:
+        tracks = clip["tracks"]
+        times = np.asarray(clip["times"], dtype=np.float64)
+        out += name_field(clip["name"])
+        out += name_field("")
+        out += name_field(clip.get("root", "root"))
+        out += struct.pack("<H", len(tracks))
+        for track in tracks:
+            out += name_field(track[0])
+        out += struct.pack(
+            "<8H",
+            clip.get("fps", 30),
+            0,
+            0,
+            7,
+            0,
+            0,
+            clip.get("layout_flag", 4),
+            len(times),
+        )
+        # Times go out in milliseconds.
+        out += struct.pack(f"<{len(times)}f", *(times * 1000.0))
+
+        for _, translation, rotation, scale in tracks:
+            translation = np.atleast_2d(np.asarray(translation, dtype=np.float64))
+            rotation = np.atleast_2d(np.asarray(rotation, dtype=np.float64))
+            scale = np.atleast_2d(np.asarray(scale, dtype=np.float64))
+            out += struct.pack(
+                "<4B",
+                1 if len(translation) > 1 else 0,
+                1 if len(rotation) > 1 else 0,
+                1 if len(scale) > 1 else 0,
+                0,
+            )
+            out += translation.astype("<f4").tobytes()
+            out += rotation.astype("<f4").tobytes()
+            out += scale.astype("<f2").tobytes()
+        out += struct.pack("<B", 0)
+
+    return bytes(out)

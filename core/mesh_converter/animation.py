@@ -265,6 +265,102 @@ def _slerp(start, end, ratio: float) -> np.ndarray:
     )
 
 
+def clips_from_rgis(
+    rgis,
+    skeleton: Skeleton,
+    *,
+    only: list[str] | None = None,
+) -> tuple[list[AnimationClip], list[str]]:
+    """
+    Convert parsed RGIS clips onto a skeleton.
+
+    RGIS stores parent-relative TRS per bone, which is the same quantity a glTF
+    node animation channel carries, so no re-parenting is needed. Two things
+    are handled here:
+
+    * **Bones are matched by name**, never by position. A clip drives a subset
+      of the rig and stores it in its own order, so index-based matching would
+      silently animate the wrong limb.
+    * **The skeleton's coordinate conversion is applied** to every keyframe, as
+      ``C @ L @ inverse(C)``, so the animation lands in the same space as the
+      geometry and the inverse bind matrices.
+
+    Parameters:
+    - rgis: a :class:`core.anim_loader.RGISFile`.
+    - skeleton: the rig the clips apply to, built from the matching ``.mesh``.
+    - only: clip names to convert; ``None`` converts all of them.
+
+    Returns:
+    - ``(clips, notes)`` where ``notes`` records bones a clip drives that the
+      mesh does not have, and any clip that ended up with nothing to animate.
+    """
+    from core.mesh_converter.skeleton import decompose_trs
+
+    index_of = {bone.name: bone.source_index for bone in skeleton.bones}
+    conversion = skeleton.conversion
+    inverse_conversion = conversion.inverse
+    notes: list[str] = []
+    clips: list[AnimationClip] = []
+
+    for source in rgis.clips:
+        if only is not None and source.name not in only:
+            continue
+
+        tracks: list[BoneTrack] = []
+        missing: list[str] = []
+        for track in source.tracks:
+            if track.name not in index_of:
+                if track.animated:
+                    missing.append(track.name)
+                continue
+            if not track.animated:
+                # A constant channel equals the node's own rest transform, so
+                # writing it would only add a channel that changes nothing.
+                continue
+
+            key_count = source.key_count
+            translations = np.zeros((key_count, 3))
+            rotations = np.zeros((key_count, 4))
+            scales = np.zeros((key_count, 3))
+            for frame in range(key_count):
+                t = track.translation[frame if track.translation_animated else 0]
+                r = track.rotation[frame if track.rotation_animated else 0]
+                s = track.scale[frame if track.scale_animated else 0]
+                local = compose_trs(t, r, s)
+                converted = conversion.matrix @ local @ inverse_conversion
+                out_t, out_r, out_s, _ = decompose_trs(converted)
+                translations[frame] = out_t
+                rotations[frame] = out_r
+                scales[frame] = out_s
+
+            times = np.asarray(source.times, dtype=np.float64)
+            bone_track = BoneTrack(bone=index_of[track.name])
+            if track.translation_animated:
+                bone_track.translation_times = times
+                bone_track.translation_values = translations
+            if track.rotation_animated:
+                bone_track.rotation_times = times
+                bone_track.rotation_values = make_quaternions_continuous(
+                    normalize_quaternions(rotations)
+                )
+            if track.scale_animated:
+                bone_track.scale_times = times
+                bone_track.scale_values = scales
+            tracks.append(bone_track)
+
+        if missing:
+            notes.append(
+                f"clip {source.name!r} drives {len(missing)} bone(s) the mesh does "
+                f"not have: {', '.join(sorted(set(missing))[:6])}"
+            )
+        if not tracks:
+            notes.append(f"clip {source.name!r} has no channel this rig can use")
+            continue
+        clips.append(AnimationClip(name=source.name, tracks=tracks))
+
+    return clips, notes
+
+
 def rotation_clip(
     skeleton: Skeleton,
     bone: int,

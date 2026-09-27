@@ -17,3 +17,6 @@ settings.json
 *.idx
 *.wpk
 *.mesh
+
+# Scratch directory for game samples under inspection
+/temp/

@@ -161,12 +161,21 @@ def main(glb_path: str) -> int:
             worst = max(worst, float(distances[nearest]))
         return mapping, worst
 
-    vertex_map, worst_match = match_vertices(rest)
+    # When Blender kept every vertex it also kept their order, and an
+    # index-for-index comparison is exact. Only fall back to matching on
+    # position when it dropped unreferenced vertices, and say which happened.
     dropped = len(expected_rest) - len(rest)
+    if dropped == 0 and np.allclose(rest, expected_rest, atol=tolerance):
+        vertex_map = {index: index for index in range(len(rest))}
+        worst_match = float(np.abs(rest - expected_rest).max())
+        how = "index for index"
+    else:
+        vertex_map, worst_match = match_vertices(rest)
+        how = "matched on position"
     check(
         "rest geometry matches the exported positions",
         worst_match <= tolerance,
-        f"max error {worst_match:.3e}, tolerance {tolerance:.3e}"
+        f"max error {worst_match:.3e}, tolerance {tolerance:.3e}, {how}"
         + (f"; Blender dropped {dropped} unreferenced vertices" if dropped else ""),
     )
 
@@ -229,32 +238,55 @@ def main(glb_path: str) -> int:
 
     # --- weights -------------------------------------------------------------
     group_name = {group.index: group.name for group in mesh_object.vertex_groups}
+
+    def exported_influences(index):
+        """Bone name -> weight for one exported vertex."""
+        out = {}
+        for slot, weight in zip(gltf_joints[index], gltf_weights[index]):
+            if weight > 0.0:
+                bone = node_name[skin["joints"][slot]]
+                out[bone] = out.get(bone, 0.0) + float(weight)
+        return out
+
+    # Meshes duplicate vertices at UV and normal seams, so several exported
+    # vertices can share one position and they need not share weights. Matching
+    # a Blender vertex to a single nearest source would then compare against an
+    # arbitrary one of them. Group by position and accept a match against any
+    # member; a genuine weighting error still fails, because then no member
+    # matches.
     weight_errors = []
     for vertex in mesh_object.data.vertices:
-        source = vertex_map[vertex.index]
         blender_weights = {
             group_name[element.group]: element.weight for element in vertex.groups
         }
-        exported = {}
-        for slot, weight in zip(gltf_joints[source], gltf_weights[source]):
-            if weight > 0.0:
-                exported[node_name[skin["joints"][slot]]] = (
-                    exported.get(node_name[skin["joints"][slot]], 0.0) + float(weight)
-                )
-        if set(blender_weights) != set(exported):
+        # Every source vertex sitting at this one's position, found by distance
+        # rather than by a rounded key, so a value straddling a rounding
+        # boundary cannot silently pick the wrong neighbour.
+        distances = np.linalg.norm(expected_rest - rest[vertex.index], axis=1)
+        candidates = np.nonzero(distances <= tolerance)[0].tolist()
+        if not candidates:
+            candidates = [vertex_map[vertex.index]]
+        matched = False
+        for candidate in candidates:
+            exported = exported_influences(candidate)
+            if set(blender_weights) != set(exported):
+                continue
+            if all(
+                abs(blender_weights[bone] - weight) <= 1e-4
+                for bone, weight in exported.items()
+            ):
+                matched = True
+                break
+        if not matched:
+            shown = exported_influences(candidates[0])
             weight_errors.append(
-                f"v{vertex.index}: {sorted(blender_weights)} != {sorted(exported)}"
+                f"v{vertex.index}: blender {sorted(blender_weights)} matches none of "
+                f"{len(candidates)} source vertex(es) at that position, e.g. {sorted(shown)}"
             )
-            continue
-        for bone_name, weight in exported.items():
-            if abs(blender_weights[bone_name] - weight) > 1e-4:
-                weight_errors.append(
-                    f"v{vertex.index}/{bone_name}: {blender_weights[bone_name]:.4f} != {weight:.4f}"
-                )
     check(
         "vertex groups reproduce the exported influences",
         not weight_errors,
-        "; ".join(weight_errors[:4]),
+        "; ".join(weight_errors[:3]),
     )
 
     # --- deformation ---------------------------------------------------------
