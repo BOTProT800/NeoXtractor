@@ -15,7 +15,7 @@ from core.mesh_converter.gltf_scene import (
     SkinDataError,
     build_scene,
 )
-from core.mesh_converter.skeleton import IDENTITY_CONVERSION
+from core.mesh_converter.skeleton import IDENTITY_CONVERSION, MIRROR_X
 from tests.support import gltf_spec_check as spec
 from tests.support.gltf_reader import read_any
 from tests.support.synthetic import (
@@ -441,28 +441,35 @@ class TestGeometry:
         positions = document.accessor(primitive["attributes"]["POSITION"])
 
         expected = np.asarray(mesh.mesh.position, dtype=np.float64)
-        expected[:, 0] *= -1.0
         assert np.allclose(positions, expected, atol=1e-6)
 
         mesh_node = gltf_data["nodes"][0]
         assert not {"matrix", "translation", "rotation", "scale"} & set(mesh_node)
 
-    def test_the_mirror_reverses_triangle_winding(self):
+    def test_the_default_export_keeps_the_source_winding(self):
+        """
+        NeoX is already right-handed with counter-clockwise front faces.
+
+        Measured on real models: the geometric normal from the stored winding
+        agrees with the stored vertex normals for every triangle. So the
+        export applies no basis change and must not touch the winding.
+        """
         mesh = asymmetric_character()
         document = export_and_read(mesh)
         primitive = document.json_data["meshes"][0]["primitives"][0]
         indices = document.accessor(primitive["indices"]).reshape(-1, 3)
 
-        source = np.asarray(mesh.mesh.face, dtype=np.int64)
-        assert np.array_equal(indices, source[:, [0, 2, 1]])
+        assert np.array_equal(indices, np.asarray(mesh.mesh.face, dtype=np.int64))
 
-    def test_the_identity_conversion_keeps_the_source_winding(self):
+    def test_a_mirroring_conversion_reverses_the_winding(self):
+        """Mirroring flips orientation, so the triangle order has to follow."""
         mesh = asymmetric_character()
-        document = read_any(glb.convert(mesh, conversion=IDENTITY_CONVERSION))
+        document = read_any(glb.convert(mesh, conversion=MIRROR_X))
         primitive = document.json_data["meshes"][0]["primitives"][0]
         indices = document.accessor(primitive["indices"]).reshape(-1, 3)
 
-        assert np.array_equal(indices, np.asarray(mesh.mesh.face, dtype=np.int64))
+        source = np.asarray(mesh.mesh.face, dtype=np.int64)
+        assert np.array_equal(indices, source[:, [0, 2, 1]])
 
     def test_normals_are_unit_length_and_follow_the_conversion(self):
         mesh = make_mesh_data(
@@ -476,7 +483,7 @@ class TestGeometry:
         normals = document.accessor(primitive["attributes"]["NORMAL"])
 
         assert np.allclose(np.linalg.norm(normals, axis=1), 1.0, atol=1e-6)
-        assert np.allclose(normals[0], (-1.0, 0.0, 0.0), atol=1e-6)
+        assert np.allclose(normals[0], (1.0, 0.0, 0.0), atol=1e-6)
 
     def test_a_mesh_without_bones_still_exports(self):
         mesh = make_mesh_data(
@@ -534,3 +541,81 @@ class TestGltfAndGlbAgree:
         assert "uri" not in glb_buffers[0]
         assert gltf_document.buffers[0] == glb_document.buffers[0]
         assert spec.check_gltf(gltf_document) == []
+
+
+class TestHandedness:
+    """
+    The export must not mirror a source that is already right-handed.
+
+    This is the check that was missing: a mirrored model still shades
+    correctly once the winding is reversed to match, so the mistake is
+    invisible in a viewer until you look at an asymmetric feature.
+    """
+
+    def winding_agrees_with_normals(self, positions, normals, faces):
+        """Mean dot of the geometric normal against the stored vertex normals."""
+        p = np.asarray(positions, dtype=np.float64)
+        n = np.asarray(normals, dtype=np.float64)
+        f = np.asarray(faces, dtype=np.int64)
+        geometric = np.cross(p[f[:, 1]] - p[f[:, 0]], p[f[:, 2]] - p[f[:, 0]])
+        lengths = np.linalg.norm(geometric, axis=1)
+        usable = lengths > 1e-9
+        geometric = geometric[usable] / lengths[usable][:, None]
+        stored = (n[f[:, 0]] + n[f[:, 1]] + n[f[:, 2]])[usable]
+        stored = stored / np.linalg.norm(stored, axis=1)[:, None]
+        return float(np.mean(np.einsum("ij,ij->i", geometric, stored)))
+
+    def test_the_export_preserves_source_handedness(self):
+        """
+        A right-handed, counter-clockwise source must stay that way.
+
+        Measured the same way on the real models: mean dot +0.99 with 100% of
+        triangles agreeing, which is the glTF convention already.
+        """
+        mesh = make_mesh_data(
+            positions=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)],
+            faces=[(0, 1, 2)],
+            normals=[(0.0, 0.0, 1.0)] * 3,
+        )
+        source_agreement = self.winding_agrees_with_normals(
+            mesh.mesh.position, mesh.mesh.normal, mesh.mesh.face
+        )
+        assert source_agreement > 0.9, "the fixture itself must be right-handed CCW"
+
+        document = export_and_read(mesh)
+        primitive = document.json_data["meshes"][0]["primitives"][0]
+        positions = document.accessor(primitive["attributes"]["POSITION"])
+        normals = document.accessor(primitive["attributes"]["NORMAL"])
+        indices = document.accessor(primitive["indices"]).reshape(-1, 3)
+
+        exported_agreement = self.winding_agrees_with_normals(
+            positions, normals, indices
+        )
+        assert exported_agreement > 0.9, (
+            "the exported winding disagrees with the exported normals, so the "
+            "geometry was mirrored without the normals following"
+        )
+        # And the geometry itself is not a mirror image.
+        assert np.allclose(positions, np.asarray(mesh.mesh.position), atol=1e-6)
+
+    def test_a_mirroring_conversion_keeps_normals_consistent(self):
+        """
+        Mirroring on purpose must still leave a self-consistent file.
+
+        The fixture needs normals that actually agree with its winding, which
+        the asymmetric rig's placeholder normals do not.
+        """
+        mesh = make_mesh_data(
+            positions=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)],
+            faces=[(0, 1, 2)],
+            normals=[(0.0, 0.0, 1.0)] * 3,
+        )
+        document = read_any(glb.convert(mesh, conversion=MIRROR_X))
+        primitive = document.json_data["meshes"][0]["primitives"][0]
+
+        agreement = self.winding_agrees_with_normals(
+            document.accessor(primitive["attributes"]["POSITION"]),
+            document.accessor(primitive["attributes"]["NORMAL"]),
+            document.accessor(primitive["indices"]).reshape(-1, 3),
+        )
+        assert agreement > 0.9

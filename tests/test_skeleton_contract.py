@@ -11,6 +11,7 @@ import pytest
 
 from core.mesh_converter.skeleton import (
     IDENTITY_CONVERSION,
+    MIRROR_X,
     NEOX_TO_GLTF,
     MatrixRole,
     MatrixStorage,
@@ -310,17 +311,19 @@ class TestCoordinateConversion:
         transform = column_vector_transform((1.0, 2.0, 3.0), 55.0)
         point = np.array([0.4, -1.2, 2.5, 1.0])
 
-        converted_transform = NEOX_TO_GLTF.transform(transform)
-        converted_point = NEOX_TO_GLTF.matrix @ point
+        converted_transform = MIRROR_X.transform(transform)
+        converted_point = MIRROR_X.matrix @ point
 
         assert np.allclose(
             converted_transform @ converted_point,
-            NEOX_TO_GLTF.matrix @ (transform @ point),
+            MIRROR_X.matrix @ (transform @ point),
         )
 
-    def test_the_flip_reverses_winding(self):
-        assert NEOX_TO_GLTF.flips_winding is True
+    def test_a_mirror_reverses_winding_and_the_default_does_not(self):
+        assert MIRROR_X.flips_winding is True
         assert IDENTITY_CONVERSION.flips_winding is False
+        # NeoX needs no basis change, measured from winding against normals.
+        assert NEOX_TO_GLTF.flips_winding is False
 
     def test_converted_skeleton_still_rests_at_identity(self):
         matrices = [
@@ -328,9 +331,19 @@ class TestCoordinateConversion:
             row_vector_matrix((1.0, 2.0, 0.0), 30.0),
         ]
 
-        skeleton = build_skeleton([-1, 0], ["a", "b"], matrices, conversion=NEOX_TO_GLTF)
+        skeleton = build_skeleton([-1, 0], ["a", "b"], matrices, conversion=MIRROR_X)
 
         for matrix in skeleton.skinning_matrices():
             assert np.allclose(matrix, np.identity(4), atol=1e-12)
         # The mirrored bone origin has to follow the mirrored geometry.
         assert skeleton.bones[1].global_rest[:3, 3] == pytest.approx([-1.0, 2.0, 0.0])
+
+    def test_the_default_conversion_leaves_the_skeleton_alone(self):
+        matrices = [
+            row_vector_matrix((0.0, 0.0, 0.0)),
+            row_vector_matrix((1.0, 2.0, 0.0), 30.0),
+        ]
+
+        skeleton = build_skeleton([-1, 0], ["a", "b"], matrices, conversion=NEOX_TO_GLTF)
+
+        assert skeleton.bones[1].global_rest[:3, 3] == pytest.approx([1.0, 2.0, 0.0])

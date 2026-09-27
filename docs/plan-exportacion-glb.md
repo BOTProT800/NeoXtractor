@@ -62,14 +62,26 @@ Transponer una matriz para cambiar su interpretación (`to_contract_matrix`) y s
 
 **Conversión de coordenadas.**
 
-El visor invierte X y cambia el orden de los triángulos; el exportador glTF original exportaba la geometría original. La diferencia se resolvió con una conversión declarada, `CoordinateConversion`, aplicada de forma coherente:
+**NeoX no necesita ninguna.** Medido, no supuesto, sobre `tiejiayong_03` y `jianzao_dunpai`:
+
+- **Lateralidad.** Para cada triángulo, la normal geométrica del bobinado almacenado, `cross(v1-v0, v2-v0)`, concuerda con las normales de vértice guardadas: producto escalar medio `+0.99`, el **100 %** de los triángulos positivo. Caras frontales en sentido antihorario sobre base diestra es exactamente la convención glTF.
+- **Eje vertical.** `jianzao_dunpai` va de Y=0.05 a Y=20.06 con X simétrico respecto a cero: una figura de pie sobre el suelo con Y arriba. glTF también es Y-up.
+
+Por tanto `NEOX_TO_GLTF` es la identidad.
+
+**Esto fue un error corregido.** Hasta el 27 de septiembre de 2026 el exportador reflejaba X, heredado del visor y del exportador IQE sin comprobarlo. Eso producía una **imagen especular** del modelo; como además invertía el bobinado para compensar, el sombreado salía correcto y el fallo era invisible salvo mirando un detalle asimétrico. Lo reportó el usuario al abrir su modelo en Blender. La regresión que lo habría detectado —comparar el bobinado exportado contra las normales exportadas, y comprobar que las posiciones no son un espejo— está ahora en `tests/test_gltf_scene.py::TestHandedness`.
+
+`MIRROR_X` se conserva como conversión disponible, porque es una convención real del visor y del exportador IQE, y sigue probada: espejar a propósito debe dejar un archivo coherente consigo mismo.
+
+La conversión, sea cual sea, se aplica de forma coherente:
 
 - posiciones mediante `C`,
 - normales mediante `inverse(C).T`,
 - transformaciones mediante `C @ M @ inverse(C)`,
-- orden de triángulos invertido cuando `det(C) < 0`.
+- orden de triángulos invertido cuando `det(C) < 0`,
+- y también a los keyframes de animación, para que malla y clips caigan en el mismo espacio.
 
-El valor por omisión para glTF y GLB es `NEOX_TO_GLTF`, el espejo en X que ya aplicaban el visor y el exportador IQE, y que convierte la base zurda de NeoX en la base diestra que glTF requiere. `IDENTITY_CONVERSION` exporta la base original sin cambios. Las inversas de enlace se derivan de las globales **ya convertidas**, nunca se convierten dos veces.
+Las inversas de enlace se derivan de las globales **ya convertidas**, nunca se convierten dos veces.
 
 El parser sigue omitiendo datos de algunos bloques adicionales/submallas y deduce variantes mediante tamaños. Si el modelo afectado usa una paleta de huesos por bloque, la corrección se limita a construir `bone_to_slot` de otra manera: el resto del exportador ya trabaja sobre esos mapas. Esa paleta continúa siendo una posibilidad a investigar, no un hecho establecido.
 
@@ -370,9 +382,15 @@ Dimensionar mal el bit `0x0002` desplaza todos los huesos siguientes, así que s
 
 **Cómo exportar animaciones.**
 
+Desde la interfaz: «Save As → glTF 2.0 Binary (GLB) Format with animations (.gis)...». Pide el `.gis` y luego el destino. Las mallas llegan al visor como bytes de un NPK, sin ruta donde mirar al lado, así que el archivo de animación se elige explícitamente en vez de adivinarse.
+
+Desde la línea de órdenes:
+
 ```
 uv run python tools/diagnose_mesh.py modelo.mesh --anim modelo.gis
 uv run python tools/diagnose_mesh.py modelo.mesh --anim modelo.gis --clips walk_f,idle
 ```
+
+En ambos casos las animaciones van **dentro del mismo `.glb`**; no hacen falta archivos separados.
 
 El siguiente paso concreto es obtener la muestra afectada y contrastar con ella la convención declarada; el resto de la primera meta está implementado y cubierto por regresiones.

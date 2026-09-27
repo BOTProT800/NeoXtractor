@@ -256,15 +256,17 @@ class TestBridge:
         """
         Geometry and animation must land in the same space.
 
-        The default export mirrors X. A turn about Z seen through that mirror
-        is the same angle the other way, so the exported quaternion's Z
-        component flips sign relative to the unconverted one.
+        The default needs no basis change, but when one is asked for it has to
+        reach the clips too. A turn about Z seen through an X mirror is the
+        same angle the other way, so the quaternion's Z component flips sign.
         """
+        from core.mesh_converter.skeleton import MIRROR_X
+
         mesh = asymmetric_character()
         parsed = read_rgis(simple_file())
 
         plain = build_scene(mesh, conversion=IDENTITY_CONVERSION).skeleton
-        mirrored = build_scene(mesh).skeleton
+        mirrored = build_scene(mesh, conversion=MIRROR_X).skeleton
 
         unconverted, _ = clips_from_rgis(parsed, plain)
         converted, _ = clips_from_rgis(parsed, mirrored)

@@ -1,12 +1,17 @@
 """Code for viewer tab window customization."""
 
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from PySide6 import QtCore, QtWidgets
 
+from core.anim_loader import is_rgis, read_rgis
 from core.logger import get_logger
 from core.mesh_converter import FORMATS, convert_mesh
+from core.mesh_converter.animation import clips_from_rgis
+from core.mesh_converter.formats import glb
+from core.mesh_converter.gltf_scene import build_scene
 from gui.widgets.managed_rhi_widget import ManagedRhiWidget
 
 if TYPE_CHECKING:
@@ -14,7 +19,58 @@ if TYPE_CHECKING:
     from gui.windows.viewer_tab_window import ViewerTabWindow
 
 
-def _save_as_format(viewer: "MeshViewer", target_format, file_path: str):
+def _load_animation_clips(window, viewer: "MeshViewer"):
+    """
+    Ask for a ``.gis`` file and convert its clips onto the loaded mesh.
+
+    Meshes reach the viewer as bytes out of an NPK, with no path to look
+    beside, so the animation file is chosen explicitly rather than guessed.
+
+    Returns:
+    - ``(clips, error)``. ``clips`` is None when the user cancelled.
+    """
+    file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+        window,
+        "Select the NeoX animation file for this mesh",
+        "",
+        "NeoX animation (*.gis);;All files (*)",
+    )
+    if not file_path:
+        return None, None
+
+    mesh = viewer.render_widget.mesh_data
+    if mesh is None:
+        return None, "no mesh loaded"
+
+    try:
+        payload = Path(file_path).read_bytes()
+        if not is_rgis(payload):
+            return None, (
+                f"{Path(file_path).name} is not a NeoX RGIS animation file "
+                f"(it starts with {payload[:4]!r})"
+            )
+        scene = build_scene(mesh.raw_data)
+        if scene.skeleton is None:
+            return None, "this mesh has no usable skeleton, so clips cannot be attached"
+
+        rgis = read_rgis(payload)
+        clips, notes = clips_from_rgis(rgis, scene.skeleton)
+    except Exception as error:  # noqa: BLE001 - surfaced to the user verbatim
+        get_logger().exception("Failed to read animations from %s", file_path)
+        return None, str(error) or error.__class__.__name__
+
+    for name, reason in rgis.skipped:
+        get_logger().warning("Animation %s skipped: %s", name, reason)
+    for note in notes:
+        get_logger().warning("Animation: %s", note)
+
+    if not clips:
+        detail = "; ".join(reason for _, reason in rgis.skipped) or "; ".join(notes)
+        return None, f"no clip in that file can drive this rig. {detail}"
+    return clips, None
+
+
+def _save_as_format(viewer: "MeshViewer", target_format, file_path: str, **options):
     """
     Save the current mesh in the specified format.
 
@@ -33,7 +89,7 @@ def _save_as_format(viewer: "MeshViewer", target_format, file_path: str):
     # Convert before touching the filesystem: opening the file first leaves an
     # empty file behind whenever the conversion rejects the data.
     try:
-        payload = convert_mesh(mesh.raw_data, target_format)
+        payload = convert_mesh(mesh.raw_data, target_format, **options)
     except Exception as error:  # noqa: BLE001 - surfaced to the user verbatim
         get_logger().exception("Failed to convert mesh to %s", target_format.NAME)
         return str(error) or error.__class__.__name__
@@ -81,6 +137,48 @@ def _save_current_as_format(window: "ViewerTabWindow", target_format):
                 "Save Failed",
                 f"Could not save the mesh as {target_format.NAME}.\n\n{error}",
             )
+
+
+def _save_current_with_animations(window: "ViewerTabWindow"):
+    """Save the current mesh as GLB with clips from a chosen ``.gis`` file."""
+    viewer = cast("MeshViewer", window.tab_widget.currentWidget())
+    if viewer is None or viewer.render_widget.mesh_data is None:
+        QtWidgets.QMessageBox.warning(
+            window, "No File Opened", "Please open a mesh file before saving."
+        )
+        return
+
+    clips, error = _load_animation_clips(window, viewer)
+    if error is not None:
+        QtWidgets.QMessageBox.critical(window, "Animations Not Loaded", error)
+        return
+    if clips is None:
+        return
+
+    file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
+        window,
+        f"Save Mesh with {len(clips)} animation(s)",
+        "",
+        f"{glb.NAME} Files (*{glb.EXTENSION})",
+    )
+    if not file_path:
+        return
+
+    failure = _save_as_format(viewer, glb, file_path, animations=clips)
+    if failure is None:
+        QtWidgets.QMessageBox.information(
+            window,
+            "Save Successful",
+            f"Saved with {len(clips)} animation(s): "
+            + ", ".join(clip.name for clip in clips[:8])
+            + ("..." if len(clips) > 8 else ""),
+        )
+    else:
+        QtWidgets.QMessageBox.critical(
+            window,
+            "Save Failed",
+            f"Could not save the mesh.\n\n{failure}",
+        )
 
 
 def _save_all_as_format(window: "ViewerTabWindow", target_format):
@@ -166,6 +264,14 @@ def setup_mesh_viewer_tab_window(window: "ViewerTabWindow"):
         action.triggered.connect(
             lambda _, fmt=fmt: _save_current_as_format(window, fmt)
         )
+
+    save_as_menu.addSeparator()
+    animated_action = save_as_menu.addAction(
+        f"{glb.NAME} with animations (.gis)..."
+    )
+    animated_action.triggered.connect(
+        lambda _: _save_current_with_animations(window)
+    )
 
     save_all_as_menu = window.menuBar().addMenu("Save All As")
     for fmt in FORMATS:

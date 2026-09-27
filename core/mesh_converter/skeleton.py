@@ -126,13 +126,28 @@ class CoordinateConversion:
 #: No conversion; export exactly the source basis.
 IDENTITY_CONVERSION = CoordinateConversion("identity", np.identity(4))
 
-#: Mirror X. This is the conversion the viewer (``mesh_renderer``) and the IQE
-#: exporter already apply, and it is what turns the left-handed NeoX basis into
-#: the right-handed basis glTF requires. Mirroring also reverses triangle
-#: winding, which this module reports through ``flips_winding``.
-NEOX_TO_GLTF = CoordinateConversion(
-    "neox_flip_x", np.diag(np.array([-1.0, 1.0, 1.0, 1.0]))
-)
+#: Mirror X. The viewer (``mesh_renderer``) and the IQE exporter apply this.
+#: It is **not** what glTF needs, see :data:`NEOX_TO_GLTF`; it is kept because
+#: it is a real convention in this codebase and useful for comparison.
+MIRROR_X = CoordinateConversion("mirror_x", np.diag(np.array([-1.0, 1.0, 1.0, 1.0])))
+
+#: NeoX to glTF: nothing to do.
+#:
+#: Measured rather than assumed, on ``tiejiayong_03`` and ``jianzao_dunpai``:
+#:
+#: * **Handedness.** For every triangle, the geometric normal taken from the
+#:   stored winding, ``cross(v1 - v0, v2 - v0)``, agrees with the stored vertex
+#:   normals: mean dot ``+0.99``, 100% of triangles positive. Counter-clockwise
+#:   front faces in a right-handed basis is exactly the glTF convention, so the
+#:   source is already right-handed.
+#: * **Up axis.** ``jianzao_dunpai`` spans Y from 0.05 to 20.06 while X is
+#:   symmetric about zero, which is a figure standing on the ground plane with
+#:   Y up. glTF is Y up too.
+#:
+#: This used to mirror X, inherited from the viewer without checking. That
+#: produced a mirror image of the model; reversing the winding to match kept
+#: the shading correct, which is precisely why it was easy to miss.
+NEOX_TO_GLTF = IDENTITY_CONVERSION
 
 
 @dataclass
