@@ -126,9 +126,10 @@ class CoordinateConversion:
 #: No conversion; export exactly the source basis.
 IDENTITY_CONVERSION = CoordinateConversion("identity", np.identity(4))
 
-#: Mirror X. The viewer (``mesh_renderer``) and the IQE exporter apply this.
-#: It is **not** what glTF needs, see :data:`NEOX_TO_GLTF`; it is kept because
-#: it is a real convention in this codebase and useful for comparison.
+#: Mirror X. The viewer (``mesh_renderer``) and the IQE exporter used to apply
+#: this, and showed the mirror image of the game until 28 September 2026. It is
+#: **not** what glTF needs, see :data:`NEOX_TO_GLTF`; it is kept to export the
+#: mirror image on purpose, for comparing the two next to the game.
 MIRROR_X = CoordinateConversion("mirror_x", np.diag(np.array([-1.0, 1.0, 1.0, 1.0])))
 
 #: NeoX to glTF: nothing to do.

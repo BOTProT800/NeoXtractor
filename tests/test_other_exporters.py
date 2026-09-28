@@ -7,6 +7,9 @@ hierarchy from a single root. The expected values here are computed from the
 fixture's own numbers, not from the exporters.
 """
 
+import os
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -401,3 +404,92 @@ class TestEulerHelper:
         assert np.allclose(
             recompose_euler(euler_xyz_from_matrix(source)), rotation("y", 33.0), atol=1e-9
         )
+
+
+class TestPmxHandedness:
+    """
+    MMD is left-handed, NeoX data right-handed: the PMX has to mirror.
+
+    The first test pins what the file holds. It cannot say whether that is
+    right; the round trip through mmd_tools below can, and it is what showed
+    the unconverted PMX as the mirror image of the game.
+    """
+
+    def read_back(self, payload, tmp_path):
+        pymeshio_reader = pytest.importorskip("pymeshio.pmx.reader")
+        target = tmp_path / "model.pmx"
+        target.write_bytes(payload)
+        return pymeshio_reader.read_from_file(str(target))
+
+    def test_the_file_holds_the_figure_mirrored_in_z(self, tmp_path):
+        from tests.support.synthetic import box_figure
+
+        figure = box_figure()
+        model = self.read_back(pmx_format.convert(figure), tmp_path)
+
+        positions = np.array([[v.position.x, v.position.y, v.position.z] for v in model.vertices])
+        normals = np.array([[v.normal.x, v.normal.y, v.normal.z] for v in model.vertices])
+        mirror = np.array([1.0, 1.0, -1.0])
+        assert np.allclose(positions, np.asarray(figure.mesh.position) * mirror, atol=1e-6)
+        assert np.allclose(normals, np.asarray(figure.mesh.normal) * mirror, atol=1e-6)
+
+        bones = {bone.name: (bone.position.x, bone.position.y, bone.position.z) for bone in model.bones}
+        assert bones["forearm_l"] == pytest.approx((0.9, 2.1, 0.0))
+
+        # Mirroring turns triangles inside out; the order is reversed to match,
+        # so the file still agrees with its own normals.
+        faces = np.asarray(model.indices).reshape(-1, 3)
+        geometric = np.cross(
+            positions[faces[:, 1]] - positions[faces[:, 0]],
+            positions[faces[:, 2]] - positions[faces[:, 0]],
+        )
+        assert (np.einsum("ij,ij->i", geometric, normals[faces[:, 0]]) > 0.0).all()
+
+    @pytest.mark.skipif(
+        not (os.environ.get("NEOX_BLENDER_PYTHON") and os.environ.get("NEOX_MMD_TOOLS")),
+        reason="set NEOX_BLENDER_PYTHON and NEOX_MMD_TOOLS (a blender_mmd_tools checkout)",
+    )
+    def test_mmd_tools_reads_back_the_figure_unmirrored(self, tmp_path):
+        """
+        Through mmd_tools and Blender's glTF exporter, the figure comes back as
+        it went in: nose at +Z, staff at +X. Unconverted, the nose came back at
+        -Z with the staff still at +X, which is the mirror image.
+        """
+        import subprocess
+
+        from tests.support.gltf_reader import read_any
+        from tests.support.synthetic import box_figure
+
+        figure = box_figure()
+        source = tmp_path / "figure.pmx"
+        source.write_bytes(pmx_format.convert(figure))
+        destination = tmp_path / "figure.glb"
+        process = subprocess.run(
+            [
+                os.environ["NEOX_BLENDER_PYTHON"],
+                str(Path(__file__).parent / "support" / "mmd_roundtrip.py"),
+                os.environ["NEOX_MMD_TOOLS"],
+                str(source),
+                str(destination),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        assert "RESULT ok" in process.stdout, (process.stdout + process.stderr)[-4000:]
+
+        document = read_any(destination.read_bytes())
+        back = np.concatenate(
+            [
+                document.accessor(primitive["attributes"]["POSITION"])
+                for mesh in document.json_data["meshes"]
+                for primitive in mesh["primitives"]
+            ]
+        )
+        source_positions = np.asarray(figure.mesh.position)
+        # mmd_tools may split or merge vertices; compare as point sets.
+        for points, others in ((back, source_positions), (source_positions, back)):
+            nearest = np.min(
+                np.linalg.norm(points[:, None, :] - others[None, :, :], axis=-1), axis=1
+            )
+            assert nearest.max() < 1e-4

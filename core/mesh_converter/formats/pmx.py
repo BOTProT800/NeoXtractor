@@ -3,12 +3,13 @@
 import io
 from typing import cast
 
+import numpy as np
 import pymeshio.pmx.writer
 from pymeshio import common, pmx
 
 from core.logger import get_logger
 from core.mesh_converter.skeleton import (
-    IDENTITY_CONVERSION,
+    CoordinateConversion,
     SkeletonError,
     build_skeleton,
 )
@@ -17,9 +18,20 @@ from core.mesh_loader import MeshData
 NAME = "Polygon Model eXtended (PMX) Format"
 EXTENSION = ".pmx"
 
-# Geometry is written in the source basis, so the skeleton is resolved in that
-# same basis. Mesh and bones have to agree.
-CONVERSION = IDENTITY_CONVERSION
+#: NeoX to PMX: mirror Z.
+#:
+#: MikuMikuDance is left-handed with Y up, and NeoX data is right-handed with
+#: Y up (see ``NEOX_TO_GLTF``). The reference PMX reader, mmd_tools
+#: (https://github.com/MMD-Blender/blender_mmd_tools), shows it: it brings a
+#: PMX into Blender with ``.xzy``, a mirror, and reverses every face. Written
+#: unconverted, as this exporter used to, the model came out in MMD as the
+#: mirror image of the game; imported back through mmd_tools, a staff held in
+#: the left hand ended up in the right.
+#:
+#: Z rather than X, because MMD's camera looks at a model from -Z: a figure
+#: that faces +Z here faces that camera there. Mesh, normals and bones all go
+#: through the same conversion, so they keep agreeing with each other.
+CONVERSION = CoordinateConversion("mirror_z", np.diag(np.array([1.0, 1.0, -1.0, 1.0])))
 
 #: Influence slots a PMX Bdef4 vertex holds.
 MAX_LINKS = 4
@@ -147,8 +159,8 @@ def convert(mesh: MeshData) -> bytes:
 
     unweighted = 0
     for i, position in enumerate(mesh.mesh.position):
-        x, y, z = position
-        nx, ny, nz = mesh.mesh.normal[i]
+        x, y, z = (float(value) for value in CONVERSION.point(position))
+        nx, ny, nz = (float(value) for value in CONVERSION.direction(mesh.mesh.normal[i]))
         u, v = mesh.mesh.uv[i]
 
         links = influences(i)
@@ -192,9 +204,13 @@ def convert(mesh: MeshData) -> bytes:
             len(mesh.mesh.position),
         )
 
-    # Add faces
-    for face in mesh.mesh.face:
-        pmx_model.indices.extend(face)
+    # Add faces. The mirror turns every triangle inside out, so the order is
+    # reversed to put it back, as mmd_tools does in the other direction.
+    for a, b, c in mesh.mesh.face:
+        if CONVERSION.flips_winding:
+            pmx_model.indices.extend((a, c, b))
+        else:
+            pmx_model.indices.extend((a, b, c))
 
     # Default single material
     material = pmx.Material(

@@ -12,6 +12,16 @@ def convert(mesh: MeshData) -> bytes:
     """
     Convert mesh to IQE format.
 
+    Coordinates are written as stored: NeoX data is right-handed, and so is
+    IQE. The format's reference tools say so (https://github.com/lsalzman/iqm):
+    the Blender exporter writes Blender's right-handed coordinates unchanged,
+    and the compiler's OBJ loader only rotates an OBJ to Z up (``.zxy()``,
+    not a mirror). Both reverse every triangle ("Quake winding is reversed"),
+    so front faces are clockwise here, and both flip V.
+
+    This exporter used to mirror X, as the viewer did; the model came out as
+    the mirror image of the game and of the glTF export.
+
     Parameters:
     - mesh: MeshData object containing bones, vertices, faces, etc.
 
@@ -84,7 +94,7 @@ def convert(mesh: MeshData) -> bytes:
             iqe_lines.append(f'joint "{mesh.bones.names[index]}" {parent_index}\n')
             x, y, z = bone_translate[index]
             w, i_quat, j, k = bone_rotation[index]
-            iqe_lines.append(f"pq {-x} {y} {z} {i_quat} {-j} {-k} {w}\n")
+            iqe_lines.append(f"pq {x} {y} {z} {i_quat} {j} {k} {w}\n")
 
         def deep_first_search(index, index_pool, parent_index):
             index_pool[0] += 1
@@ -117,11 +127,11 @@ def convert(mesh: MeshData) -> bytes:
     iqe_lines.append("\n")
     # Write vertex positions
     for x, y, z in mesh.mesh.position:
-        iqe_lines.append(f"vp {-x} {y} {z}\n")
+        iqe_lines.append(f"vp {x} {y} {z}\n")
     iqe_lines.append("\n")
 
     for x, y, z in mesh.mesh.normal:
-        iqe_lines.append(f"vn {-x} {y} {z}\n")
+        iqe_lines.append(f"vn {x} {y} {z}\n")
     iqe_lines.append("\n")
 
     # Write UV coordinates
@@ -148,8 +158,8 @@ def convert(mesh: MeshData) -> bytes:
             iqe_lines.append("\n")
         iqe_lines.append("\n")
 
-    # Write faces
+    # Write faces, reversed: IQE front faces are clockwise.
     for v1, v2, v3 in mesh.mesh.face:
-        iqe_lines.append(f"fm {v3} {v1} {v2}\n")
+        iqe_lines.append(f"fm {v1} {v3} {v2}\n")
 
     return "".join(iqe_lines).encode("utf-8")
