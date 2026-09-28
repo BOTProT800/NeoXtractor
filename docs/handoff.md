@@ -30,10 +30,21 @@ Necesita `NEOX_BLENDER_PYTHON` y `NEOX_GLTF_VALIDATOR` (ver abajo). La imagen
 no dice si coincide con el juego: eso hay que compararlo a ojo con algo
 asimétrico (la mano del arma, un logotipo, el peinado).
 
-**Repasar el trabajo con esta regla en mente ya encontró dos cosas.** La
-justificación escrita de que NeoX no necesita espejo era falsa (ver
-«Decisiones»), y el visor de la propia aplicación sigue mostrando la imagen
-especular del GLB (ver «Pendientes», punto 1).
+**Aplicar esta regla ya encontró cuatro cosas**, todas corregidas el 28 de
+septiembre. La justificación escrita de que NeoX no necesita espejo era falsa
+(ver «Decisiones»). Y el visor de la propia aplicación, el exportador IQE y el
+PMX mostraban la imagen especular del juego; se vio en una captura del visor
+real y al importar el PMX con mmd_tools (ver «Lateralidad por formato»).
+
+Para el visor de la aplicación:
+
+```
+uv run python tools/capture_viewer.py modelo.mesh
+```
+
+hace una captura del visor real con las teclas 1, 3, Ctrl+1 y Ctrl+7, para
+ponerla al lado de `modelo.png` y del juego. En Linux sin pantalla, con
+`xvfb-run -a` delante.
 
 ## Dónde está todo
 
@@ -42,7 +53,7 @@ especular del GLB (ver «Pendientes», punto 1).
 | Rama | `feat/glb-export` sobre `main` (`438da76`) |
 | Remoto | `https://github.com/BOTProT800/NeoXtractor` — la rama está subida, `main` intacto |
 | PR | sin abrir: `https://github.com/BOTProT800/NeoXtractor/pull/new/feat/glb-export` |
-| Pruebas | 205 con Blender y el validador; 197 + 8 saltadas solo con el validador (así correrá CI); 185 + 20 saltadas sin ninguno |
+| Pruebas | 216 con todo (Blender, validador, mmd_tools y visor con pantalla); 206 + 10 saltadas solo con el validador (así correrá CI); 194 + 22 saltadas sin nada |
 
 ## Entorno que hace falta reconstruir
 
@@ -78,8 +89,21 @@ set NEOX_GLTF_VALIDATOR=C:/tmp/kv/node_modules/gltf-validator
 ```
 
 La versión está fijada porque `tests/support/khronos.py` lista los mensajes
-informativos que emite esa versión. Sin las dos variables, las pruebas de
-Blender y del validador se saltan y el resto pasa igual.
+informativos que emite esa versión.
+
+**mmd_tools**, para comprobar el PMX como lo lee la gente: un clon de
+https://github.com/MMD-Blender/blender_mmd_tools y, en el entorno de Blender,
+`uv pip install --python <blender-python> opencc-python-reimplemented==0.1.7`
+(ojo: **no** el paquete `opencc`). `set NEOX_MMD_TOOLS=<ruta del clon>`.
+
+**Visor con pantalla**: `set NEOX_VIEWER_TESTS=1` activa la prueba que abre el
+visor real. En Windows basta; en Linux sin pantalla, `xvfb-run -a uv run
+pytest` y las librerías `libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1
+libxcb-shape0 libxcb-xinerama0 libxcb-randr0 libxcb-render-util0
+libxcb-image0 libxkbcommon-x11-0`.
+
+Sin estas variables, las pruebas correspondientes se saltan y el resto pasa
+igual.
 
 **Muestras.** El juego está en `E:\Instaladores\Main\Cyber Hunter`. Los NPK se
 leen en el sitio, no hace falta copiarlos. `configs/cyber_hunter.json` ya tiene
@@ -143,6 +167,23 @@ que un espejo en X deja igual.
 para que nadie vuelva a citarla como prueba. `--conversion mirror_x` en
 `diagnose_mesh.py` exporta la versión en espejo para compararlas lado a lado.
 
+**Lateralidad por formato.** Todos deben enseñar lo mismo que el juego. La
+convención de cada formato sale de la herramienta de referencia de ese formato,
+no de este proyecto, y donde se pudo se comprobó mirando:
+
+| Destino | Convención | Qué hace NeoXtractor | Evidencia |
+| --- | --- | --- | --- |
+| GLB/glTF | diestro, Y arriba, caras antihorarias | coordenadas tal cual | vista en Blender contra el juego |
+| Visor de la app | cámara OpenGL diestra | coordenadas tal cual (antes: espejo en X) | captura del visor real junto al render del GLB |
+| IQE | diestro, caras horarias, V invertida | tal cual, triángulos invertidos (antes: espejo en X) | exportador de Blender y compilador de lsalzman/iqm |
+| PMX (MMD) | zurdo, Y arriba | espejo en Z y triángulos invertidos (antes: tal cual) | importado con mmd_tools y renderizado |
+| OBJ | diestro | tal cual | convención del formato |
+| ASCII | formato de texto propio | tal cual | sin consumidor externo que consultar |
+| SMD | diestro, **Z arriba** | tal cual | sin espejo; puede salir tumbado (sin comprobar) |
+
+En el visor, la tecla 3 cambió de signo para seguir enseñando el mismo lado
+del modelo (+X) que antes del cambio.
+
 **Los TRS de RGIS son relativos al padre y los cuaterniones van `(x,y,z,w)`.**
 Contrastado contra el `.mesh`: error de traslación 2.68 leído como local frente
 a 87.28 como global, y con `(x,y,z,w)` seis de diez huesos reproducen la
@@ -194,17 +235,16 @@ derivan de los tiempos.
 
 ## Pendientes, en orden de utilidad
 
-**1. El visor de la aplicación y el exportador IQE siguen reflejando X.**
-`gui/renderers/mesh_renderer.py:43` y `core/mesh_converter/formats/iqe.py:120`
-niegan X, con una proyección OpenGL corriente. Es decir: **muestran la imagen
-especular del GLB**. Si la observación en Blender es correcta, el visor de
-NeoXtractor lleva tiempo enseñando los modelos al revés; si no, el GLB está
-mal. Se resuelve abriendo el mismo modelo en el visor de la app, el GLB con
-`--render`, y comparando ambos con el juego. No se ha tocado porque es un
-cambio visible en la aplicación y la decisión es del usuario. Al ver el
-espejo en `tiejiayong_03`, el usuario lo comparó **con el propio juego**
-(Cyber Hunter), según confirmó el 28 de septiembre: la referencia es la buena,
-y eso apunta a que el que está al revés es el visor.
+**1. Mirar un modelo real en el visor corregido.** El visor, el IQE y el PMX
+se corrigieron con la figura sintética (el usuario lo pidió: «que coincidan»).
+Falta abrir `tiejiayong_03` en el visor de la app y comprobar contra el juego
+que ya no sale en espejo.
+
+**Encontrado de paso, sin tocar:** la tecla 7 del visor («top») mira el modelo
+**desde abajo** (cámara en −Y) y Ctrl+7 desde arriba, al revés que en Blender.
+No tiene que ver con el espejo. Es un cambio de un signo en
+`gui/widgets/viewers/mesh_viewer/camera.py`, pero cambia lo que hace una tecla,
+así que queda a decisión del usuario.
 
 **2. Pasar el validador y el render sobre los modelos reales.** `tiejiayong_03`
 con sus 10 clips y `jianzao_dunpai` con sus 22, con `--validate --render`. En
@@ -263,11 +303,12 @@ El script imprime qué leyó el parser, qué convención detectó y por qué, qu
 descartó, el informe del validador y dónde dejó la imagen. Es lo que convierte
 un «se ve raro» en algo diagnosticable.
 
-Sobre un `.glb` ya exportado:
+Sobre un `.glb` ya exportado, y sobre el visor de la app:
 
 ```
 <blender-python> tools/render_glb.py modelo.glb --clip walk_f
 <blender-python> tests/support/blender_check.py modelo.glb
+uv run python tools/capture_viewer.py modelo.mesh
 ```
 
 ## Mapa de módulos
@@ -281,9 +322,11 @@ core/mesh_converter/formats/glb.py contenedor binario
 gui/widgets/animation_picker.py    diálogo de selección múltiple
 tools/diagnose_mesh.py             diagnóstico, exportación, validación y render
 tools/render_glb.py                hoja de vistas de un .glb, con Blender
+tools/capture_viewer.py            captura del visor de la app, vistas 1/3/Ctrl+1/Ctrl+7
 tests/support/blender_check.py     verificador ejecutable sobre cualquier .glb
 tests/support/khronos.py           validador oficial de Khronos desde Python
 tests/support/khronos_validate.js  el mismo, del lado de Node
+tests/support/mmd_roundtrip.py     PMX -> mmd_tools -> GLB, para ver el PMX como en MMD
 tests/support/gltf_reader.py       lector independiente, sin código compartido
 tests/support/gltf_spec_check.py   reglas de la especificación (respaldo sin Node)
 tests/support/synthetic.py         fixtures: .mesh y .gis binarios, rigs, figura

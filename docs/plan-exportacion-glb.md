@@ -45,7 +45,7 @@ ASCII, PMX y SMD leían la traslación del hueso desde `matrix[0, 3]` o `matrix.
 
 Los tres respetan el centinela derivado de `joint_index_bits` y **no reasignan a la raíz** una influencia inválida: la descartan y lo registran. PMX obliga a que todo vértice referencie un hueso, así que un vértice sin influencia utilizable cae en el primero y se informa cuántos, en lugar de disimularlo.
 
-Conservan su geometría sin convertir, así que el esqueleto se resuelve con `IDENTITY_CONVERSION` para que malla y huesos sigan en el mismo espacio.
+ASCII y SMD conservan su geometría sin convertir, así que el esqueleto se resuelve con `IDENTITY_CONVERSION` para que malla y huesos sigan en el mismo espacio. El PMX refleja Z desde el 28 de septiembre de 2026, porque MMD es zurdo (ver «Conversión de coordenadas»), y malla, normales y huesos pasan por esa misma conversión.
 
 **Hipótesis contrastadas sobre la convención de matrices.**
 
@@ -73,7 +73,15 @@ La regresión que se presentó como la que «lo habría detectado» sí falla co
 
 Lo que sí decidiría la lateralidad desde los datos, sin depender del juego: un texto en una textura, o huesos con nombres izquierda/derecha frente a la dirección hacia la que mira el personaje. Mientras no se haga, la evidencia es la observación en Blender, comparada con el propio juego (Cyber Hunter), según confirmó el usuario el 28 de septiembre de 2026.
 
-**El visor de NeoXtractor y el exportador IQE siguen reflejando X** (`gui/renderers/mesh_renderer.py`, `core/mesh_converter/formats/iqe.py`), con una proyección OpenGL corriente. Por tanto muestran la imagen especular del GLB. Uno de los dos está al revés respecto al juego; no se ha tocado el visor porque es un cambio visible en la aplicación y la decisión es del usuario.
+**El visor de NeoXtractor, el exportador IQE y el PMX también salían en espejo**, y se corrigieron el 28 de septiembre de 2026 a petición del usuario («que coincidan»). Cada caso se vio, no se dedujo:
+
+- **Visor.** Negaba X con una cámara OpenGL corriente. `tools/capture_viewer.py` hizo una captura del visor real (bajo Xvfb) con la figura de prueba: visto desde +Z, el bastón de la mano izquierda salía a la izquierda, y en el render del GLB a la derecha. Sin el espejo, las cuatro vistas coinciden con las de `tools/render_glb.py`. La tecla 3 cambió de signo para seguir enseñando el mismo lado del modelo (+X). `tests/test_viewer_handedness.py` lo cubre, con una prueba que abre el visor real si hay pantalla (`NEOX_VIEWER_TESTS=1`).
+- **IQE.** Negaba X. La convención del formato está en las herramientas de su autor (lsalzman/iqm): el exportador de Blender escribe las coordenadas diestras de Blender sin tocar e invierte cada triángulo («Quake winding is reversed»), y el compilador carga un OBJ rotándolo a Z arriba con `.zxy()` —no un espejo—, invirtiendo triángulos y V. El IQE antiguo ya tenía las caras horarias en su espacio espejado; ahora se escribe sin espejo y con los triángulos invertidos. No hay importador IQE para Blender con el que mirarlo, así que aquí la evidencia es esa referencia. `tests/test_iqe_export.py`.
+- **PMX.** Se escribía sin convertir, pero MMD es zurdo: mmd_tools, el lector de referencia, lo importa con `.xzy` (un espejo) e invirtiendo caras. Importado con mmd_tools y renderizado, el PMX antiguo mostraba la figura mirando a −Z con el bastón aún en +X, es decir, en la mano derecha. Ahora se refleja Z (así la figura mira además a la cámara por defecto de MMD) y se invierten los triángulos; por mmd_tools vuelve idéntica al GLB. `TestPmxHandedness`, con una prueba que hace ese viaje de verdad si hay Blender y mmd_tools.
+
+El OBJ, el ASCII (un formato de texto propio, sin consumidor externo) y el SMD escriben las coordenadas tal cual, como el GLB, así que no tienen espejo. El SMD es un formato con Z arriba y podría salir tumbado; no se ha comprobado.
+
+De paso se vio que la tecla 7 del visor («top») mira desde abajo; no tiene que ver con el espejo y queda sin tocar.
 
 `MIRROR_X` se conserva como conversión disponible, porque es una convención real del visor y del exportador IQE, y sigue probada: espejar a propósito debe dejar un archivo coherente consigo mismo.
 
@@ -123,7 +131,7 @@ Se rechaza la exportación, en lugar de disimularla: peso positivo sobre un cent
 
 **Comprobaciones ejecutadas.**
 
-Suite de regresión en `tests/`: 153 pruebas cuando se escribió esta sección, **205 al 28 de septiembre de 2026** con Blender y el validador de Khronos disponibles; 185 y 20 saltadas sin ninguno de los dos, y 197 y 8 saltadas solo con el validador, que es como correrá CI:
+Suite de regresión en `tests/`: 153 pruebas cuando se escribió esta sección, **216 al 28 de septiembre de 2026** con todo disponible (Blender, validador de Khronos, mmd_tools y visor con pantalla); 194 y 22 saltadas sin nada, y 206 y 10 saltadas solo con el validador, que es como correrá CI:
 
 ```
 tests/support/synthetic.py        fixtures: blobs .mesh byte a byte y MeshData
@@ -146,6 +154,10 @@ tests/test_khronos_validator.py   12 pruebas con el validador oficial de Khronos
 tests/support/khronos.py          el validador desde Python (khronos_validate.js en Node)
 tests/test_diagnose_tool.py        2 pruebas de tools/diagnose_mesh.py de punta a punta
 tools/render_glb.py               hoja de vistas de un .glb, para mirarlo
+tools/capture_viewer.py           captura del visor de la aplicación
+tests/test_viewer_handedness.py    6 pruebas del visor, una con el visor real
+tests/test_iqe_export.py           3 pruebas del IQE contra la convención de lsalzman/iqm
+tests/support/mmd_roundtrip.py    PMX -> mmd_tools -> GLB
 ```
 
 El lector de `tests/support/gltf_reader.py` no comparte código ni constantes con el escritor: el contenedor, los tipos de chunk, los tamaños de componente y el orden de columnas se derivan otra vez de la especificación. Todas las aserciones de los exportadores leen el **archivo exportado**, no el estado intermedio del constructor.
