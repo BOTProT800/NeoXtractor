@@ -545,11 +545,16 @@ class TestGltfAndGlbAgree:
 
 class TestHandedness:
     """
-    The export must not mirror a source that is already right-handed.
+    What the tests can and cannot say about mirroring.
 
-    This is the check that was missing: a mirrored model still shades
-    correctly once the winding is reversed to match, so the mistake is
-    invisible in a viewer until you look at an asymmetric feature.
+    They can pin the decision: the default export keeps the source basis, and
+    any conversion leaves a file whose winding agrees with its normals.
+
+    They cannot make the decision. Whether NeoX needs a mirror was settled by
+    looking at ``tiejiayong_03`` in Blender, not by any assertion here: the
+    winding-against-normals measurement once offered as proof scores the same
+    on a mirror image, which ``test_winding_agreement_cannot_tell_a_mirror``
+    keeps on record so it is not offered as proof again.
     """
 
     def winding_agrees_with_normals(self, positions, normals, faces):
@@ -565,57 +570,75 @@ class TestHandedness:
         stored = stored / np.linalg.norm(stored, axis=1)[:, None]
         return float(np.mean(np.einsum("ij,ij->i", geometric, stored)))
 
-    def test_the_export_preserves_source_handedness(self):
-        """
-        A right-handed, counter-clockwise source must stay that way.
-
-        Measured the same way on the real models: mean dot +0.99 with 100% of
-        triangles agreeing, which is the glTF convention already.
-        """
-        mesh = make_mesh_data(
-            positions=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)],
-            faces=[(0, 1, 2)],
-            normals=[(0.0, 0.0, 1.0)] * 3,
-        )
-        source_agreement = self.winding_agrees_with_normals(
-            mesh.mesh.position, mesh.mesh.normal, mesh.mesh.face
-        )
-        assert source_agreement > 0.9, "the fixture itself must be right-handed CCW"
-
-        document = export_and_read(mesh)
+    def exported(self, mesh, **options):
+        """Positions, normals and triangles as the exported file stores them."""
+        document = read_any(glb.convert(mesh, **options))
         primitive = document.json_data["meshes"][0]["primitives"][0]
-        positions = document.accessor(primitive["attributes"]["POSITION"])
-        normals = document.accessor(primitive["attributes"]["NORMAL"])
-        indices = document.accessor(primitive["indices"]).reshape(-1, 3)
-
-        exported_agreement = self.winding_agrees_with_normals(
-            positions, normals, indices
-        )
-        assert exported_agreement > 0.9, (
-            "the exported winding disagrees with the exported normals, so the "
-            "geometry was mirrored without the normals following"
-        )
-        # And the geometry itself is not a mirror image.
-        assert np.allclose(positions, np.asarray(mesh.mesh.position), atol=1e-6)
-
-    def test_a_mirroring_conversion_keeps_normals_consistent(self):
-        """
-        Mirroring on purpose must still leave a self-consistent file.
-
-        The fixture needs normals that actually agree with its winding, which
-        the asymmetric rig's placeholder normals do not.
-        """
-        mesh = make_mesh_data(
-            positions=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)],
-            faces=[(0, 1, 2)],
-            normals=[(0.0, 0.0, 1.0)] * 3,
-        )
-        document = read_any(glb.convert(mesh, conversion=MIRROR_X))
-        primitive = document.json_data["meshes"][0]["primitives"][0]
-
-        agreement = self.winding_agrees_with_normals(
+        return (
             document.accessor(primitive["attributes"]["POSITION"]),
             document.accessor(primitive["attributes"]["NORMAL"]),
             document.accessor(primitive["indices"]).reshape(-1, 3),
         )
-        assert agreement > 0.9
+
+    def l_shape(self):
+        """
+        An asymmetric "L" facing +Z, with normals that agree with its winding.
+
+        The foot of the L points to +X; a mirror is the only thing that can
+        make it point to -X.
+        """
+        return make_mesh_data(
+            positions=[
+                (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 0.3, 0.0), (0.0, 0.3, 0.0),
+                (0.0, 0.3, 0.0), (0.3, 0.3, 0.0), (0.3, 2.0, 0.0), (0.0, 2.0, 0.0),
+            ],
+            faces=[(0, 1, 2), (0, 2, 3), (4, 5, 6), (4, 6, 7)],
+            normals=[(0.0, 0.0, 1.0)] * 8,
+        )
+
+    def test_the_default_export_keeps_the_source_basis(self):
+        """
+        Pins the decision taken by looking at the model: no mirror.
+
+        If this fails, the default conversion changed. Do not "fix" it without
+        opening a real model in a viewer and comparing it with the game.
+        """
+        mesh = self.l_shape()
+        assert self.winding_agrees_with_normals(
+            mesh.mesh.position, mesh.mesh.normal, mesh.mesh.face
+        ) > 0.9, "the fixture itself must agree with its own normals"
+
+        positions, normals, indices = self.exported(mesh)
+
+        assert np.allclose(positions, np.asarray(mesh.mesh.position), atol=1e-6)
+        assert self.winding_agrees_with_normals(positions, normals, indices) > 0.9, (
+            "the exported winding disagrees with the exported normals, so the "
+            "geometry was mirrored without the normals following"
+        )
+
+    def test_a_mirroring_conversion_keeps_normals_consistent(self):
+        """Mirroring on purpose must still leave a self-consistent file."""
+        positions, normals, indices = self.exported(self.l_shape(), conversion=MIRROR_X)
+        assert self.winding_agrees_with_normals(positions, normals, indices) > 0.9
+
+    def test_winding_agreement_cannot_tell_a_mirror(self):
+        """
+        The measurement once cited as proof of handedness is blind to mirrors.
+
+        ``cross(M a, M b) = det(M) M cross(a, b)`` for a mirror ``M``: mirroring
+        positions and normals flips the geometric normal against the stored
+        one, and reversing the winding flips it back. A plain export and a
+        mirrored one score exactly the same, while the shape points the other
+        way. Only looking at the model against a reference can tell them apart.
+        """
+        mesh = self.l_shape()
+        plain = self.exported(mesh, conversion=IDENTITY_CONVERSION)
+        mirrored = self.exported(mesh, conversion=MIRROR_X)
+
+        assert self.winding_agrees_with_normals(*plain) == pytest.approx(
+            self.winding_agrees_with_normals(*mirrored), abs=1e-9
+        )
+        # Same score, opposite shapes: the foot of the L swaps sides.
+        assert plain[0][:, 0].max() == pytest.approx(1.0)
+        assert mirrored[0][:, 0].min() == pytest.approx(-1.0)
+        assert not np.allclose(plain[0], mirrored[0])

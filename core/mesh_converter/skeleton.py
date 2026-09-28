@@ -133,20 +133,28 @@ MIRROR_X = CoordinateConversion("mirror_x", np.diag(np.array([-1.0, 1.0, 1.0, 1.
 
 #: NeoX to glTF: nothing to do.
 #:
-#: Measured rather than assumed, on ``tiejiayong_03`` and ``jianzao_dunpai``:
+#: **What decides this is a look at the model, not a measurement.** Until
+#: 27 September 2026 the export mirrored X, inherited from the viewer without
+#: checking; opening ``tiejiayong_03`` in Blender showed a mirror image of the
+#: model. Reversing the winding to match had kept the shading right, so it
+#: only showed in an asymmetric detail.
 #:
-#: * **Handedness.** For every triangle, the geometric normal taken from the
-#:   stored winding, ``cross(v1 - v0, v2 - v0)``, agrees with the stored vertex
-#:   normals: mean dot ``+0.99``, 100% of triangles positive. Counter-clockwise
-#:   front faces in a right-handed basis is exactly the glTF convention, so the
-#:   source is already right-handed.
-#: * **Up axis.** ``jianzao_dunpai`` spans Y from 0.05 to 20.06 while X is
-#:   symmetric about zero, which is a figure standing on the ground plane with
-#:   Y up. glTF is Y up too.
+#: Two measurements were once offered as proof here. Neither can tell a mirror
+#: apart, and ``TestHandedness`` keeps that on record:
 #:
-#: This used to mirror X, inherited from the viewer without checking. That
-#: produced a mirror image of the model; reversing the winding to match kept
-#: the shading correct, which is precisely why it was easy to miss.
+#: * **Winding against stored normals** (mean dot ``+0.99``, 100% of triangles
+#:   positive on ``tiejiayong_03`` and ``jianzao_dunpai``). It proves the file
+#:   is self-consistent, nothing more: ``cross(M a, M b) = det(M) M cross(a, b)``
+#:   for a mirror ``M``, so mirroring positions and normals *and* reversing the
+#:   winding gives exactly the same agreement. A left-handed source with
+#:   clockwise front faces scores the same ``+0.99``.
+#: * **Up axis.** ``jianzao_dunpai`` spans Y from 0.05 to 20.06 with X
+#:   symmetric about zero. That settles Y up; an X symmetric extent is, by
+#:   definition, the one thing an X mirror leaves unchanged.
+#:
+#: What *would* settle it from the data: an asymmetric feature compared with
+#: the game, text in a texture, or left/right named bones seen against the
+#: direction the character faces.
 NEOX_TO_GLTF = IDENTITY_CONVERSION
 
 
