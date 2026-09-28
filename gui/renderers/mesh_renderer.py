@@ -38,17 +38,18 @@ class ProcessedMeshData:
     def __init__(self, raw_data: MeshData):
         self.raw_data = raw_data
 
-        # Process mesh data
+        # Drawn exactly as stored. This used to mirror X (and swap two indices
+        # per triangle to keep the winding), which showed every model as the
+        # mirror image of the game and of the glTF export. NeoX data is already
+        # right-handed with Y up, like the OpenGL-style camera used here; see
+        # NEOX_TO_GLTF in core/mesh_converter/skeleton.py.
         pos = np.array(raw_data.mesh.position)
-        pos[:, 0] = -pos[:, 0]  # Flip X-axis
         norm = np.array(raw_data.mesh.normal)
-        norm[:, 0] = -norm[:, 0]  # Flip X-axis for normals as well
 
         # Combine position and normals into a single array
         self.vertices = np.hstack((pos, norm))
 
-        # Reorder indices
-        self.indices = np.array(raw_data.mesh.face)[:, [1, 0, 2]]
+        self.indices = np.array(raw_data.mesh.face)
         self.wireframe_indices = self._generate_wireframe_indices(self.indices)
 
         # Calculate normal lines
@@ -74,17 +75,15 @@ class ProcessedMeshData:
         bone_lines = []
 
         for i, parent in enumerate(raw_data.bones.parents):
-            # Apply the flip to the bone's matrix
+            # Row-vector storage: the bone origin sits in the last row.
             matrix = raw_data.bones.matrix[i]
             pos = np.asarray(matrix.T)[:3, 3].copy()
-            pos[0] = -pos[0]  # Flip X-axis for bone positions
             bone_positions.append(pos)
 
             # Only create a line if the bone has a parent
             if parent != -1:
                 parent_matrix = raw_data.bones.matrix[parent]
                 parent_pos = np.asarray(parent_matrix.T)[:3, 3].copy()
-                parent_pos[0] = -parent_pos[0]
                 bone_lines.extend([pos, parent_pos])
 
         self.bone_positions = bone_positions

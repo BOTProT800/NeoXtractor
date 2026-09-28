@@ -181,7 +181,10 @@ class Camera:
         if direct == OrthogonalDirection.FRONT:
             self.yaw = 0.0 if not opposite else 180.0
         elif direct == OrthogonalDirection.RIGHT:
-            self.yaw = 90.0 if not opposite else -90.0
+            # Camera on +X (-X when opposite). This key looked from the model's
+            # +X while the viewer mirrored X; the sign follows the fix so it
+            # keeps showing the same side of the model.
+            self.yaw = -90.0 if not opposite else 90.0
         elif direct == OrthogonalDirection.TOP:
             self.pitch = -90.0 if not opposite else 90.0
 
