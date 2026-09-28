@@ -128,8 +128,9 @@ las dos ranuras es la afín `(0,0,0,1)`. Ver `core/mesh_converter/skeleton.py`.
 
 **NeoX no necesita espejo para glTF, y eso lo decide la vista, no una
 medida.** Hasta el 27 de septiembre el exportador reflejaba X, heredado del
-visor. El usuario abrió `tiejiayong_03` en Blender y vio una imagen especular;
-se quitó el espejo. Esa observación es la única evidencia.
+visor. El usuario abrió `tiejiayong_03` en Blender, lo comparó con el juego y
+vio una imagen especular; se quitó el espejo. Esa observación es la única
+evidencia, y es buena porque la referencia fue el juego.
 
 La justificación que se escribió entonces era **falsa**: «bobinado frente a
 normales guardadas, producto escalar medio +0.99, 100 % de triángulos a
@@ -200,9 +201,10 @@ especular del GLB**. Si la observación en Blender es correcta, el visor de
 NeoXtractor lleva tiempo enseñando los modelos al revés; si no, el GLB está
 mal. Se resuelve abriendo el mismo modelo en el visor de la app, el GLB con
 `--render`, y comparando ambos con el juego. No se ha tocado porque es un
-cambio visible en la aplicación y la decisión es del usuario. Tampoco consta
-**contra qué** se comparó `tiejiayong_03` al ver el espejo; conviene anotarlo
-aquí.
+cambio visible en la aplicación y la decisión es del usuario. Al ver el
+espejo en `tiejiayong_03`, el usuario lo comparó **con el propio juego**
+(Cyber Hunter), según confirmó el 28 de septiembre: la referencia es la buena,
+y eso apunta a que el que está al revés es el visor.
 
 **2. Pasar el validador y el render sobre los modelos reales.** `tiejiayong_03`
 con sus 10 clips y `jianzao_dunpai` con sus 22, con `--validate --render`. En

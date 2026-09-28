@@ -71,7 +71,7 @@ Transponer una matriz para cambiar su interpretación (`to_contract_matrix`) y s
 
 La regresión que se presentó como la que «lo habría detectado» sí falla con el código antiguo, pero no por medir la lateralidad: la aserción de bobinado frente a normales pasaba igual con el espejo, y la que falla solo exige que las posiciones salgan iguales a las de origen, es decir, repite la decisión. `tests/test_gltf_scene.py::TestHandedness` dice ahora lo que puede y no puede fijar, y `test_winding_agreement_cannot_tell_a_mirror` deja constancia de que esa medida es ciega al espejo.
 
-Lo que sí decidiría la lateralidad desde los datos, sin depender del juego: un texto en una textura, o huesos con nombres izquierda/derecha frente a la dirección hacia la que mira el personaje. Mientras no se haga, la evidencia es la observación en Blender, y conviene anotar contra qué se comparó.
+Lo que sí decidiría la lateralidad desde los datos, sin depender del juego: un texto en una textura, o huesos con nombres izquierda/derecha frente a la dirección hacia la que mira el personaje. Mientras no se haga, la evidencia es la observación en Blender, comparada con el propio juego (Cyber Hunter), según confirmó el usuario el 28 de septiembre de 2026.
 
 **El visor de NeoXtractor y el exportador IQE siguen reflejando X** (`gui/renderers/mesh_renderer.py`, `core/mesh_converter/formats/iqe.py`), con una proyección OpenGL corriente. Por tanto muestran la imagen especular del GLB. Uno de los dos está al revés respecto al juego; no se ha tocado el visor porque es un cambio visible en la aplicación y la decisión es del usuario.
 
