@@ -309,3 +309,56 @@ class TestEndToEnd:
         document = read_any(glb.convert(mesh, animations=clips))
 
         assert [a["name"] for a in document.json_data["animations"]] == ["wave"]
+
+
+class TestBareClipFiles:
+    """
+    The shared action libraries store one clip per file, with no RGIS header.
+
+    Measured in ``male.npk``: 2402 ``.gis`` entries against 190 meshes, each
+    one a single clip record starting straight at the clip name. Fourteen
+    sampled at random parsed byte for byte to the last one.
+    """
+
+    def bare_clip_bytes(self):
+        """A clip record with the container header stripped off."""
+        whole = simple_file()
+        # Header is magic + 10 bytes, then the reference table and pose.
+        reference_count = 2
+        start = 4 + 10 + 32 * reference_count + 40 * reference_count + 4
+        return whole[start:]
+
+    def test_a_bare_clip_is_recognised(self):
+        from core.anim_loader import looks_like_bare_clip
+
+        assert looks_like_bare_clip(self.bare_clip_bytes()) is True
+        assert looks_like_bare_clip(simple_file()) is False
+        assert looks_like_bare_clip(b"short") is False
+
+    def test_read_gis_handles_both_shapes(self):
+        from core.anim_loader import read_gis
+
+        container = read_gis(simple_file())
+        bare = read_gis(self.bare_clip_bytes())
+
+        assert container.clip_names == ["wave"]
+        assert bare.clip_names == ["wave"]
+        # A headerless file carries no reference pose.
+        assert len(container.reference_names) == 2
+        assert bare.reference_names == []
+
+    def test_the_two_shapes_yield_the_same_clip(self):
+        from core.anim_loader import read_gis
+
+        a = read_gis(simple_file()).clips[0]
+        b = read_gis(self.bare_clip_bytes()).clips[0]
+
+        assert a.key_count == b.key_count
+        assert a.times == pytest.approx(b.times)
+        assert np.allclose(a.tracks[0].rotation, b.tracks[0].rotation)
+
+    def test_something_that_is_neither_is_refused(self):
+        from core.anim_loader import read_gis
+
+        with pytest.raises(RGISReadError, match="not a NeoX animation file"):
+            read_gis(b"\x00" * 200)

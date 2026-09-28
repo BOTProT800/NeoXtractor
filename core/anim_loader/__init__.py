@@ -10,6 +10,8 @@ from .rgis import (
     RGISReadError,
     RGISTrack,
     is_rgis,
+    looks_like_bare_clip,
+    read_gis,
     read_rgis,
 )
 
@@ -19,5 +21,7 @@ __all__ = [
     "RGISTrack",
     "RGISReadError",
     "read_rgis",
+    "read_gis",
     "is_rgis",
+    "looks_like_bare_clip",
 ]

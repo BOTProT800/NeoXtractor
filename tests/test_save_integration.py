@@ -6,6 +6,7 @@ needed; the message boxes live in the callers, which is why this function
 returns an error string instead of showing one itself.
 """
 
+import numpy as np
 import pytest
 
 from core.mesh_converter import FORMATS
@@ -191,3 +192,99 @@ def test_several_siblings_come_back_sorted(sibling_animations):
         "lib/idle.gis",
         "lib/run.gis",
     ]
+
+
+class TestMergingSeveralAnimationFiles:
+    """
+    Playable characters draw on a library of single-clip files, so combining
+    several into one GLB is the normal case there.
+    """
+
+    def merge(self, sources, skeleton):
+        pytest.importorskip("PySide6")
+        from gui.widgets.tab_window_ui.mesh_viewer import _clips_from_sources
+
+        return _clips_from_sources(sources, skeleton)
+
+    def rig(self):
+        from core.mesh_converter.gltf_scene import build_scene
+
+        mesh = asymmetric_character()
+        return mesh, build_scene(mesh).skeleton
+
+    def one_clip_file(self, clip_name, degrees):
+        from tests.support.synthetic import build_rgis_file
+
+        identity = (0.0, 0.0, 0.0, 1.0)
+        turn = (0.0, 0.0, np.sin(np.radians(degrees / 2)), np.cos(np.radians(degrees / 2)))
+        return build_rgis_file(
+            reference=[("arm_l", (1.0, 2.0, 0.0), identity, (1.0, 1.0, 1.0))],
+            clips=[
+                {
+                    "name": clip_name,
+                    "times": [0.0, 1.0],
+                    "tracks": [
+                        ("arm_l", (1.0, 2.0, 0.0), [identity, turn], (1.0, 1.0, 1.0))
+                    ],
+                }
+            ],
+        )
+
+    def test_clips_from_several_files_are_combined(self):
+        mesh, skeleton = self.rig()
+        sources = [
+            ("lib/walk_f.gis", self.one_clip_file("walk_f", 30)),
+            ("lib/attack.gis", self.one_clip_file("attack", 60)),
+            ("lib/idle.gis", self.one_clip_file("idle", 10)),
+        ]
+
+        clips, notes = self.merge(sources, skeleton)
+
+        assert [clip.name for clip in clips] == ["walk_f", "attack", "idle"]
+        assert notes == []
+
+    def test_duplicate_clip_names_are_disambiguated(self):
+        """Two library files can each hold a clip called the same thing."""
+        mesh, skeleton = self.rig()
+        sources = [
+            ("lib/smg_idle.gis", self.one_clip_file("idle", 30)),
+            ("lib/rifle_idle.gis", self.one_clip_file("idle", 60)),
+        ]
+
+        clips, notes = self.merge(sources, skeleton)
+
+        names = [clip.name for clip in clips]
+        assert names[0] == "idle"
+        assert names[1] == "rifle_idle_idle"
+        assert len(set(names)) == 2
+        assert any("renamed" in note for note in notes)
+
+    def test_a_bad_file_is_reported_and_the_rest_still_load(self):
+        mesh, skeleton = self.rig()
+        sources = [
+            ("lib/good.gis", self.one_clip_file("good", 30)),
+            ("lib/broken.gis", b"not an animation at all"),
+        ]
+
+        clips, notes = self.merge(sources, skeleton)
+
+        assert [clip.name for clip in clips] == ["good"]
+        assert any("broken" in note for note in notes)
+
+    def test_the_merged_clips_export_into_one_glb(self):
+        from core.mesh_converter.formats import glb
+        from tests.support.gltf_reader import read_any
+
+        mesh, skeleton = self.rig()
+        sources = [
+            ("lib/walk_f.gis", self.one_clip_file("walk_f", 30)),
+            ("lib/attack.gis", self.one_clip_file("attack", 60)),
+        ]
+        clips, _ = self.merge(sources, skeleton)
+
+        document = read_any(glb.convert(mesh, animations=clips))
+
+        assert [a["name"] for a in document.json_data["animations"]] == [
+            "walk_f",
+            "attack",
+        ]

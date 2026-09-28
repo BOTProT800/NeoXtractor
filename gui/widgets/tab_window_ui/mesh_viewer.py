@@ -7,21 +7,19 @@ from typing import TYPE_CHECKING, cast
 
 from PySide6 import QtCore, QtWidgets
 
-from core.anim_loader import is_rgis, read_rgis
+from core.anim_loader import RGISReadError, read_gis
 from core.logger import get_logger
 from core.mesh_converter import FORMATS, convert_mesh
 from core.mesh_converter.animation import clips_from_rgis
 from core.mesh_converter.formats import glb
 from core.mesh_converter.gltf_scene import build_scene
 from gui.utils.npk import get_npk_file
+from gui.widgets.animation_picker import pick_animations
 from gui.widgets.managed_rhi_widget import ManagedRhiWidget
 
 if TYPE_CHECKING:
     from gui.widgets.viewers.mesh_viewer.viewer_widget import MeshViewer
     from gui.windows.viewer_tab_window import ViewerTabWindow
-
-
-BROWSE_LABEL = "Browse for a .gis file on disk..."
 
 
 def _sibling_animations(viewer: "MeshViewer") -> list[tuple[str, int]]:
@@ -30,7 +28,7 @@ def _sibling_animations(viewer: "MeshViewer") -> list[tuple[str, int]]:
 
     A mesh and the animations that drive it ship together: in the samples,
     25 of 26 NPC meshes have a ``.gis`` in their own folder, and player
-    characters keep a shared library folder in the same NPK. So the file is
+    characters keep a shared action library in the same NPK. So the file is
     almost always already open, and there is no reason to make the user go
     hunting for it on disk.
 
@@ -66,12 +64,59 @@ def _read_npk_entry(row: int) -> bytes | None:
     return entry.data if entry is not None else None
 
 
+def _clips_from_sources(sources, skeleton):
+    """
+    Read every chosen animation source and merge their clips.
+
+    Parameters:
+    - sources: ``(label, bytes)`` pairs.
+    - skeleton: the rig the clips must drive.
+
+    Returns:
+    - ``(clips, notes)``. Clip names are made unique across sources, because
+      the shared library stores one clip per file and two files can name their
+      clip the same thing.
+    """
+    clips = []
+    notes: list[str] = []
+    taken: set[str] = set()
+
+    for label, payload in sources:
+        stem = posixpath.splitext(posixpath.basename(label.replace("\\", "/")))[0]
+        try:
+            parsed = read_gis(payload)
+        except RGISReadError as error:
+            notes.append(f"{stem}: {error}")
+            continue
+
+        for name, reason in parsed.skipped:
+            notes.append(f"{stem}/{name}: {reason}")
+
+        found, source_notes = clips_from_rgis(parsed, skeleton)
+        notes.extend(f"{stem}: {note}" for note in source_notes)
+
+        for clip in found:
+            name = clip.name or stem
+            if name in taken:
+                name = f"{stem}_{clip.name}"
+                suffix = 2
+                while name in taken:
+                    name = f"{stem}_{clip.name}_{suffix}"
+                    suffix += 1
+                notes.append(f"renamed a duplicate clip to {name!r}")
+            clip.name = name
+            taken.add(name)
+            clips.append(clip)
+
+    return clips, notes
+
+
 def _load_animation_clips(window, viewer: "MeshViewer"):
     """
-    Pick a ``.gis`` and convert its clips onto the loaded mesh.
+    Pick one or more ``.gis`` files and convert their clips onto the mesh.
 
     Prefers animation files sitting beside the mesh in the open NPK, and falls
-    back to a file dialog when there are none.
+    back to a file dialog when there are none or the user asks for one.
 
     Returns:
     - ``(clips, error)``. ``clips`` is None when the user cancelled.
@@ -80,65 +125,57 @@ def _load_animation_clips(window, viewer: "MeshViewer"):
     if mesh is None:
         return None, "no mesh loaded"
 
+    try:
+        scene = build_scene(mesh.raw_data)
+    except Exception as error:  # noqa: BLE001 - surfaced to the user verbatim
+        get_logger().exception("Failed to build the skeleton for animation export")
+        return None, str(error) or error.__class__.__name__
+    if scene.skeleton is None:
+        return None, "this mesh has no usable skeleton, so clips cannot be attached"
+
+    sources: list[tuple[str, bytes]] = []
     siblings = _sibling_animations(viewer)
-    payload: bytes | None = None
-    source_name = ""
+    browse = not siblings
 
     if siblings:
-        labels = [name for name, _ in siblings] + [BROWSE_LABEL]
-        choice, accepted = QtWidgets.QInputDialog.getItem(
-            window,
-            "Choose an animation file",
-            f"{len(siblings)} animation file(s) found next to this mesh:",
-            labels,
-            0,
-            False,
-        )
-        if not accepted:
+        chosen, browse = pick_animations(window, [name for name, _ in siblings])
+        if chosen is None and not browse:
             return None, None
-        if choice != BROWSE_LABEL:
-            row = dict(siblings)[choice]
-            payload = _read_npk_entry(row)
-            source_name = choice
-            if payload is None:
-                return None, f"could not read {choice} out of the open NPK"
+        if chosen:
+            rows = dict(siblings)
+            for name in chosen:
+                payload = _read_npk_entry(rows[name])
+                if payload is None:
+                    return None, f"could not read {name} out of the open NPK"
+                sources.append((name, payload))
 
-    if payload is None:
-        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+    if browse:
+        paths, _ = QtWidgets.QFileDialog.getOpenFileNames(
             window,
-            "Select the NeoX animation file for this mesh",
+            "Select NeoX animation files for this mesh",
             "",
             "NeoX animation (*.gis);;All files (*)",
         )
-        if not file_path:
+        if not paths:
             return None, None
-        payload = Path(file_path).read_bytes()
-        source_name = Path(file_path).name
+        for path in paths:
+            sources.append((Path(path).name, Path(path).read_bytes()))
+
+    if not sources:
+        return None, None
 
     try:
-        if not is_rgis(payload):
-            return None, (
-                f"{source_name} is not a NeoX RGIS animation file "
-                f"(it starts with {payload[:4]!r})"
-            )
-        scene = build_scene(mesh.raw_data)
-        if scene.skeleton is None:
-            return None, "this mesh has no usable skeleton, so clips cannot be attached"
-
-        rgis = read_rgis(payload)
-        clips, notes = clips_from_rgis(rgis, scene.skeleton)
+        clips, notes = _clips_from_sources(sources, scene.skeleton)
     except Exception as error:  # noqa: BLE001 - surfaced to the user verbatim
-        get_logger().exception("Failed to read animations from %s", source_name)
+        get_logger().exception("Failed to read animations")
         return None, str(error) or error.__class__.__name__
 
-    for name, reason in rgis.skipped:
-        get_logger().warning("Animation %s skipped: %s", name, reason)
     for note in notes:
         get_logger().warning("Animation: %s", note)
 
     if not clips:
-        detail = "; ".join(reason for _, reason in rgis.skipped) or "; ".join(notes)
-        return None, f"no clip in that file can drive this rig. {detail}"
+        detail = "; ".join(notes[:4]) or "the files hold no clip this rig can use"
+        return None, f"nothing could be attached. {detail}"
     return clips, None
 
 

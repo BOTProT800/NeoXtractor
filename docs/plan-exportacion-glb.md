@@ -134,7 +134,8 @@ tests/test_skinning_deformation.py 13 pruebas de deformación
 tests/test_save_integration.py     4 pruebas del guardado desde la interfaz
 tests/test_other_exporters.py     24 pruebas de ASCII, PMX y SMD
 tests/test_animation.py           28 pruebas del escritor de animaciones
-tests/test_rgis.py                21 pruebas del lector RGIS y su puente
+tests/test_rgis.py                25 pruebas del lector RGIS y su puente
+gui/widgets/animation_picker.py   diálogo de selección múltiple con filtro
 tests/test_blender_import.py       6 pruebas de importación real en Blender
 tests/support/blender_check.py     verificador ejecutable sobre cualquier .glb
 ```
@@ -384,7 +385,7 @@ Dimensionar mal el bit `0x0002` desplaza todos los huesos siguientes, así que s
 
 Desde la interfaz: «Save As → glTF 2.0 Binary (GLB) Format with animations (.gis)...».
 
-**No hace falta abrir varios NPK: la malla y sus animaciones viajan en el mismo.** La acción busca los `.gis` que estén en la misma carpeta del NPK ya abierto y los ofrece en una lista; solo cae al diálogo de archivo si no encuentra ninguno.
+**No hace falta abrir varios NPK: la malla y sus animaciones viajan en el mismo.** La acción busca los `.gis` de la misma carpeta del NPK ya abierto y los ofrece en un diálogo con filtro y **selección múltiple**; solo cae al diálogo de archivo si no encuentra ninguno. Los clips elegidos se combinan en un único `.glb`, con los nombres desambiguados cuando dos archivos llaman igual a su clip.
 
 Medido sobre las muestras de Cyber Hunter:
 
@@ -393,6 +394,8 @@ Medido sobre las muestras de Cyber Hunter:
 | `res/npc.npk` | 25 de 26 mallas tienen un `.gis` en su propia carpeta; uno por personaje, cubriendo todas sus mallas |
 | `res/character/transformers.npk` | 6 de 6, con los `.gis` junto a las mallas |
 | `res/character/male.npk` | 190 mallas y **2402** `.gis`: los personajes jugables usan una biblioteca compartida (`common/dongzuoku_gis/`, `<pj>/common_gis/`) dentro del mismo NPK, con un archivo por clip |
+
+**Hay dos contenedores `.gis`.** El de la biblioteca compartida **no** lleva la cabecera `RGIS`: es un **registro de clip suelto**, idéntico al que va dentro del contenedor, empezando directamente por el nombre del clip. `read_gis` acepta ambos. Comprobado sobre 14 archivos de `male.npk` tomados a intervalos regulares: los 14 se recorren byte a byte hasta el último, con todos los cuaterniones unitarios y el nombre del clip coincidiendo con el del archivo.
 
 Desde la línea de órdenes:
 

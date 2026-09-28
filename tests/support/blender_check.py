@@ -399,43 +399,91 @@ def main(glb_path: str) -> int:
         )
 
         scene = bpy.context.scene
-        fps = scene.render.fps
 
-        def at(seconds):
-            scene.frame_set(int(round(seconds * fps)))
+        # Sample whichever action Blender actually has active, over its own
+        # frame range. Deriving the range from the first glTF animation instead
+        # aliases badly when a different action is the live one.
+        armature_object = [o for o in bpy.data.objects if o.type == "ARMATURE"][0]
+        animation_data = armature_object.animation_data
+        active = animation_data.action if animation_data else None
+        check("an action is live on the armature", active is not None)
+        if active is None:
+            print(f"RESULT {'ok' if not FAILURES else 'failed'}")
+            return 0 if not FAILURES else 1
+
+        first_frame, last_frame = (float(v) for v in active.frame_range)
+        span = last_frame - first_frame
+        print(f"  active action {active.name!r}, frames {first_frame}..{last_frame}")
+
+        def at(fraction):
+            scene.frame_set(int(round(first_frame + span * fraction)))
             bpy.context.view_layer.update()
             return evaluated_positions()
 
-        # Sample the first clip across its own duration.
-        first = gltf["animations"][0]
-        duration = 0.0
-        for sampler in first["samplers"]:
-            times = document.accessor(sampler["input"]).astype(np.float64)
-            duration = max(duration, float(times.max()))
-        check("the first animation has a non-zero duration", duration > 0.0)
+        duration = span
+        check("the active action spans more than one frame", span > 0.0)
 
-        if duration > 0.0:
+        if span > 0.0:
             start = at(0.0)
-            middle = at(duration * 0.5)
-            quarter = at(duration * 0.25)
-
-            moved = float(np.abs(middle - start).max())
+            travel = max(
+                float(np.abs(at(fraction) - start).max())
+                for fraction in (0.25, 0.5, 0.75, 1.0)
+            )
             check(
                 "the animation actually deforms the mesh",
-                moved > tolerance * 10.0,
-                f"largest displacement {moved:.4f}",
-            )
-            partial = float(np.abs(quarter - start).max())
-            check(
-                "interpolation ramps rather than jumping",
-                0.0 < partial < moved or moved == 0.0,
-                f"quarter {partial:.4f} vs half {moved:.4f}",
+                travel > tolerance * 10.0,
+                f"largest displacement {travel:.4f}",
             )
 
-            # Every animated bone must be one the skin actually uses.
+            # Compare Blender's evaluation against an independent CPU
+            # evaluation of the same file at the same instants. Heuristics
+            # about the shape of the motion do not hold -- a real idle
+            # oscillates, so denser sampling can legitimately show a larger
+            # step than coarser sampling -- but two unrelated implementations
+            # agreeing is a real invariant.
+            from tests.support.skinning import animation_overrides, skin_vertices
+
+            # Find which glTF animation Blender made live.
+            live = next(
+                (
+                    position
+                    for position, clip in enumerate(gltf["animations"])
+                    if clip.get("name") == active.name
+                ),
+                0,
+            )
+            fps = scene.render.fps
+            worst = 0.0
+            for step in range(0, 9):
+                frame = int(round(first_frame + span * step / 8))
+                scene.frame_set(frame)
+                bpy.context.view_layer.update()
+                blender_positions = evaluated_positions()
+
+                # The importer lays keys out at time * fps, so a frame maps
+                # straight back onto a time in seconds.
+                own = skin_vertices(
+                    document, animation_overrides(document, live, frame / fps)
+                )
+                own_in_blender_axes = np.array([gltf_to_blender(p) for p in own])
+                mapped = np.array(
+                    [own_in_blender_axes[vertex_map[i]] for i in range(len(blender_positions))]
+                )
+                worst = max(worst, float(np.abs(blender_positions - mapped).max()))
+
+            check(
+                "Blender's posed mesh matches an independent CPU evaluation",
+                worst <= max(tolerance * 20.0, 1e-3),
+                f"largest disagreement {worst:.6f} over 9 instants of "
+                f"{active.name!r}",
+            )
+
+            # Every animated bone, across every clip, must be one the skin
+            # actually uses.
             animated = {
                 gltf["nodes"][channel["target"]["node"]].get("name")
-                for channel in first["channels"]
+                for clip in gltf["animations"]
+                for channel in clip["channels"]
                 if channel["target"].get("node") is not None
             }
             joint_names = {

@@ -221,6 +221,75 @@ def is_rgis(data: bytes) -> bool:
     return data[:4] == MAGIC
 
 
+def looks_like_bare_clip(data: bytes) -> bool:
+    """
+    True when the data looks like a single clip record with no container.
+
+    The shared animation libraries the playable characters use store one clip
+    per file with no RGIS header, starting straight at the clip name. The
+    check is deliberately cheap and conservative: a printable, NUL padded name
+    in the first field and a plausible bone count where one belongs.
+    """
+    if len(data) < 98 or is_rgis(data):
+        return False
+    first = data[:NAME_SIZE]
+    text = first.split(b"\x00", 1)[0]
+    if not text or any(first[len(text) :]):
+        return False
+    if not all(32 <= c < 127 for c in text):
+        return False
+    (bone_count,) = struct.unpack_from("<H", data, NAME_SIZE * 3)
+    if not 0 < bone_count <= MAX_BONES:
+        return False
+    # The bone table and the fixed clip header have to fit.
+    return len(data) >= NAME_SIZE * 3 + 2 + NAME_SIZE * bone_count + 16
+
+
+def read_gis(data: bytes, *, strict: bool = False) -> RGISFile:
+    """
+    Read a ``.gis`` file in either shape.
+
+    NeoX ships two: an RGIS container holding many clips, used for NPCs and
+    per-character rigs, and a bare clip record with no header, used by the
+    shared action libraries the playable characters draw on. They differ only
+    in the wrapper -- the clip record inside is identical -- so both land in
+    the same :class:`RGISFile`.
+
+    Parameters:
+    - data: the file contents.
+    - strict: raise instead of recording a clip that cannot be read.
+
+    Returns:
+    - The parsed file. A bare clip yields a one-clip result with no reference
+      pose, because a headerless file carries none.
+
+    Raises:
+    - RGISReadError: the data is neither shape, or cannot be parsed.
+    """
+    if is_rgis(data):
+        return read_rgis(data, strict=strict)
+    if not looks_like_bare_clip(data):
+        raise RGISReadError(
+            f"not a NeoX animation file: no {MAGIC!r} magic and the head does not "
+            f"look like a bare clip record (starts with {data[:4]!r})"
+        )
+
+    cursor = _Cursor(data)
+    result = RGISFile(
+        version=0,
+        unknown=0,
+        reference_names=[],
+        reference_pose=np.zeros((0, 10)),
+    )
+    try:
+        result.clips.append(_read_clip(cursor))
+    except RGISReadError as error:
+        if strict:
+            raise
+        result.skipped.append((_peek_name(data, 0), str(error)))
+    return result
+
+
 def read_rgis(data: bytes, *, strict: bool = False) -> RGISFile:
     """
     Parse an RGIS animation container.
