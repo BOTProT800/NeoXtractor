@@ -62,14 +62,18 @@ Transponer una matriz para cambiar su interpretación (`to_contract_matrix`) y s
 
 **Conversión de coordenadas.**
 
-**NeoX no necesita ninguna.** Medido, no supuesto, sobre `tiejiayong_03` y `jianzao_dunpai`:
+**NeoX no necesita ninguna, y eso lo decidió una mirada, no una medida.** Hasta el 27 de septiembre de 2026 el exportador reflejaba X, heredado del visor y del exportador IQE sin comprobarlo. El usuario abrió `tiejiayong_03` en Blender y vio una **imagen especular**; como el exportador además invertía el bobinado para compensar, el sombreado salía correcto y el fallo solo se notaba en un detalle asimétrico. Se quitó el espejo y `NEOX_TO_GLTF` es la identidad.
 
-- **Lateralidad.** Para cada triángulo, la normal geométrica del bobinado almacenado, `cross(v1-v0, v2-v0)`, concuerda con las normales de vértice guardadas: producto escalar medio `+0.99`, el **100 %** de los triángulos positivo. Caras frontales en sentido antihorario sobre base diestra es exactamente la convención glTF.
-- **Eje vertical.** `jianzao_dunpai` va de Y=0.05 a Y=20.06 con X simétrico respecto a cero: una figura de pie sobre el suelo con Y arriba. glTF también es Y-up.
+**La justificación que se escribió entonces era falsa**, y se corrigió el 28 de septiembre:
 
-Por tanto `NEOX_TO_GLTF` es la identidad.
+- **Bobinado frente a normales guardadas** (producto escalar medio `+0.99`, el 100 % de los triángulos positivo en `tiejiayong_03` y `jianzao_dunpai`). Demuestra que el archivo es coherente consigo mismo, nada más. Para un espejo `M`, `cross(M a, M b) = det(M) · M · cross(a, b)`: reflejar posiciones y normales invierte la normal geométrica frente a la guardada, e invertir el bobinado la vuelve a poner. La exportación con espejo y sin él puntúan **exactamente igual** (`+1.000` las dos sobre una «L» sintética), y una fuente zurda con caras en sentido horario también daría `+0.99`.
+- **Eje vertical** (`jianzao_dunpai` va de Y=0.05 a Y=20.06 con X simétrico respecto a cero). Decide que Y es arriba; no dice nada del espejo en X, porque un contorno simétrico en X es justo lo que un espejo en X deja igual.
 
-**Esto fue un error corregido.** Hasta el 27 de septiembre de 2026 el exportador reflejaba X, heredado del visor y del exportador IQE sin comprobarlo. Eso producía una **imagen especular** del modelo; como además invertía el bobinado para compensar, el sombreado salía correcto y el fallo era invisible salvo mirando un detalle asimétrico. Lo reportó el usuario al abrir su modelo en Blender. La regresión que lo habría detectado —comparar el bobinado exportado contra las normales exportadas, y comprobar que las posiciones no son un espejo— está ahora en `tests/test_gltf_scene.py::TestHandedness`.
+La regresión que se presentó como la que «lo habría detectado» sí falla con el código antiguo, pero no por medir la lateralidad: la aserción de bobinado frente a normales pasaba igual con el espejo, y la que falla solo exige que las posiciones salgan iguales a las de origen, es decir, repite la decisión. `tests/test_gltf_scene.py::TestHandedness` dice ahora lo que puede y no puede fijar, y `test_winding_agreement_cannot_tell_a_mirror` deja constancia de que esa medida es ciega al espejo.
+
+Lo que sí decidiría la lateralidad desde los datos, sin depender del juego: un texto en una textura, o huesos con nombres izquierda/derecha frente a la dirección hacia la que mira el personaje. Mientras no se haga, la evidencia es la observación en Blender, y conviene anotar contra qué se comparó.
+
+**El visor de NeoXtractor y el exportador IQE siguen reflejando X** (`gui/renderers/mesh_renderer.py`, `core/mesh_converter/formats/iqe.py`), con una proyección OpenGL corriente. Por tanto muestran la imagen especular del GLB. Uno de los dos está al revés respecto al juego; no se ha tocado el visor porque es un cambio visible en la aplicación y la decisión es del usuario.
 
 `MIRROR_X` se conserva como conversión disponible, porque es una convención real del visor y del exportador IQE, y sigue probada: espejar a propósito debe dejar un archivo coherente consigo mismo.
 
@@ -119,7 +123,7 @@ Se rechaza la exportación, en lugar de disimularla: peso positivo sobre un cent
 
 **Comprobaciones ejecutadas.**
 
-Suite de regresión en `tests/`, 153 pruebas, ejecutada con `pytest 9.1.1` sobre Python 3.13.5 del entorno `.venv`. Sin Blender instalado quedan 147 pruebas y 6 saltadas, que es como corre en CI:
+Suite de regresión en `tests/`: 153 pruebas cuando se escribió esta sección, **205 al 28 de septiembre de 2026** con Blender y el validador de Khronos disponibles; 185 y 20 saltadas sin ninguno de los dos, y 197 y 8 saltadas solo con el validador, que es como correrá CI:
 
 ```
 tests/support/synthetic.py        fixtures: blobs .mesh byte a byte y MeshData
@@ -136,8 +140,12 @@ tests/test_other_exporters.py     24 pruebas de ASCII, PMX y SMD
 tests/test_animation.py           28 pruebas del escritor de animaciones
 tests/test_rgis.py                25 pruebas del lector RGIS y su puente
 gui/widgets/animation_picker.py   diálogo de selección múltiple con filtro
-tests/test_blender_import.py       6 pruebas de importación real en Blender
+tests/test_blender_import.py       8 pruebas de importación real en Blender, y del render
 tests/support/blender_check.py     verificador ejecutable sobre cualquier .glb
+tests/test_khronos_validator.py   12 pruebas con el validador oficial de Khronos
+tests/support/khronos.py          el validador desde Python (khronos_validate.js en Node)
+tests/test_diagnose_tool.py        2 pruebas de tools/diagnose_mesh.py de punta a punta
+tools/render_glb.py               hoja de vistas de un .glb, para mirarlo
 ```
 
 El lector de `tests/support/gltf_reader.py` no comparte código ni constantes con el escritor: el contenedor, los tipos de chunk, los tamaños de componente y el orden de columnas se derivan otra vez de la especificación. Todas las aserciones de los exportadores leen el **archivo exportado**, no el estado intermedio del constructor.
@@ -217,14 +225,14 @@ Los `.glb` y `.gltf` que exportó el usuario son **byte a byte idénticos** a lo
 
 5. **Añadir el contenedor `.glb` e integrarlo en la interfaz.** *Hecho.* `core/mesh_converter/formats/glb.py` empaqueta la misma escena; GLB registrado en `FORMATS`, de modo que aparece en «Save As» y «Save All As». La conversión ocurre **antes** de abrir el archivo, así que un error ya no deja un archivo vacío; el guardado individual informa del fallo y el guardado por lote resume cuántos se guardaron y qué falló en cada caso.
 
-6. **Aceptar el resultado con pruebas de deformación.** *Hecho salvo el validador de Khronos.* Validación estructural, evaluación CPU de skinning desde los accessors exportados, lectura con dos implementaciones de terceros (`pygltflib`, `trimesh`) e importación y posado real en Blender 4.5.14. Todo en CI antes del empaquetado, con las pruebas de Blender saltadas si no hay intérprete con `bpy`. Falta únicamente el validador oficial de Khronos.
+6. **Aceptar el resultado con pruebas de deformación.** *Hecho.* Validación estructural, evaluación CPU de skinning desde los accessors exportados, lectura con dos implementaciones de terceros (`pygltflib`, `trimesh`), importación y posado real en Blender 4.5.14, y el validador oficial de Khronos sobre once formas de salida distintas. Todo en CI antes del empaquetado, con las pruebas de Blender saltadas si no hay intérprete con `bpy`. Falta pasar el validador sobre los modelos reales.
 
 **Condiciones para dar por terminada la primera meta.**
 
 | Condición | Estado |
 | --- | --- |
 | El GLB abre correctamente y contiene geometría, skin y jerarquía completa, con todos los huesos alcanzables desde la escena | Cumplido; confirmado por Blender, pygltflib y trimesh |
-| Pasa el validador oficial de Khronos sin errores | **Pendiente**: no existe en PyPI, requiere binario externo |
+| Pasa el validador oficial de Khronos sin errores | Cumplido en los fixtures sintéticos: `gltf-validator` 2.0.0-dev.3.10, 0 errores y 0 avisos en once formas de salida. **Pendiente sobre modelos reales** (`diagnose_mesh.py --validate`) |
 | Las posiciones en reposo coinciden con la geometría de referencia (tolerancia `1e-5` × diagonal) | Cumplido, error máximo `0.0`; confirmado en Blender |
 | Un giro de hueso transforma sus vértices y descendientes según sus pesos; los ajenos no se mueven; cada lado probado por separado | Cumplido; confirmado posando el rig dentro de Blender |
 | El giro de la raíz mueve el conjunto coherentemente alrededor del pivote esperado y volver a reposo recupera la geometría | Cumplido; pivotes confirmados en Blender |
@@ -234,15 +242,15 @@ Los `.glb` y `.gltf` que exportó el usuario son **byte a byte idénticos** a lo
 
 **La primera meta está cumplida para la variante verificada.** El exportador está comprobado por tres implementaciones ajenas al proyecto, por una importación y un posado reales en Blender, y por un modelo real del juego cuyo esqueleto el usuario confirmó correcto en su visor.
 
-Queda una condición formal abierta y un límite que conviene no olvidar:
+Quedan dos límites que conviene no olvidar:
 
-- El **validador oficial de Khronos** no se ejecutó. No existe como paquete Python: se buscó el índice completo de PyPI (46 MB) y solo hay parsers (`gltflib`, `pygltflib`, `pygltfio`, `gltfloupe`, …), ninguno es el validador. Requiere el binario de Khronos o Node, ninguno de los dos disponible ni autorizado.
+- El **validador oficial de Khronos** se ejecutó el 28 de septiembre de 2026, en la sesión en la nube, sobre los fixtures sintéticos. No existe como paquete Python (se buscó el índice completo de PyPI), pero Khronos lo publica en npm como `gltf-validator`; se ejecuta con Node desde `tests/support/khronos.py`. El único mensaje es informativo: `UNUSED_OBJECT` en `TEXCOORD_0`, porque todavía no se exportan materiales. Una prueba de control comprueba que un archivo roto a propósito sí devuelve errores. Los modelos reales siguen sin pasar por él.
 - La compatibilidad se declara **solo para la variante verificada** (versión 2 / tipo 1 / kind 1). Las demás siguen apoyadas en detección automática y fixtures sintéticos, que es bastante, pero no es lo mismo que una muestra.
 
 **Pendientes, en orden de utilidad.**
 
 1. **Muestras de otras variantes.** La versión 2 / tipo 1 ya está verificada. Un `.mesh` de tipo 5 (índices de 16 bits) o de los tipos cuantizados 20-23 confirmaría que la detección automática acierta también ahí.
-2. **Validador de Khronos.** Único punto de verificación que sigue sin cubrir. Requiere el binario de [KhronosGroup/glTF-Validator](https://github.com/KhronosGroup/glTF-Validator) o Node; no existe como paquete Python (índice completo de PyPI revisado). Mientras tanto, `tests/support/gltf_spec_check.py` reimplementa el subconjunto de reglas que este flujo puede incumplir —cotas y alineación de accessors, índices de skin y joints, normalización de pesos, normales unitarias, ciclos de nodos— y está declarado en el propio módulo como *no* siendo el validador oficial.
+2. **Validador de Khronos sobre modelos reales.** Integrado y en verde sobre los fixtures ([KhronosGroup/glTF-Validator](https://github.com/KhronosGroup/glTF-Validator), paquete npm `gltf-validator`). Falta ejecutarlo sobre `tiejiayong_03` y `jianzao_dunpai` con `--validate`. `tests/support/gltf_spec_check.py` sigue como respaldo donde no hay Node.
 3. **Convención de UV.** El exportador glTF conserva `v` sin invertir, como hacía antes; el exportador IQE escribe `1 - v`. La diferencia no afecta al rig pero conviene resolverla con una textura real.
 4. **Submallas y paletas por bloque.** El parser sigue ignorando los bloques adicionales. Si una variante usa paleta de huesos por bloque, el cambio se concentra en cómo se construye `bone_to_slot`.
 
@@ -264,6 +272,19 @@ C:/tmp/blv/Scripts/python.exe tests/support/blender_check.py modelo.glb
 ```
 
 La ruta del entorno debe ser **corta**. El árbol de addons de Blender es muy profundo y un prefijo largo empuja `io_scene_gltf2` más allá del límite de 260 caracteres de Windows, donde Python deja de ver parte del addon y el importador falla con un `ModuleNotFoundError` engañoso. Con el scratchpad de esta sesión la ruta llegaba a 264 caracteres y fallaba por eso.
+
+**Verificación visual: mirar cada exportación.**
+
+Añadido el 28 de septiembre de 2026, a raíz del espejo. Las pruebas comparan la exportación con lo que el código cree que significa el origen; si esa creencia es falsa, coinciden entre sí y pasan. Mirar el modelo junto al juego es la única comprobación que no comparte la suposición, así que ahora cuesta un comando:
+
+```
+uv run python tools/diagnose_mesh.py modelo.mesh --anim modelo.gis --render walk_f
+<blender-python> tools/render_glb.py modelo.glb --clip walk_f
+```
+
+`tools/render_glb.py` importa el archivo con el importador glTF de Blender y escribe una hoja con: el modelo sólido visto desde +Z (el frente glTF), +X, −Z y +Y; las mismas vistas con la malla atenuada y el esqueleto por delante; y, con `--clip`, cinco fotogramas del clip en vista de tres cuartos con la cámara fija. Cada vista lleva los ejes glTF rotulados (rojo +X, verde +Y, azul +Z) y la cámara es ortográfica. Un bobinado que contradiga las normales del archivo sale **negro**: Blender da la vuelta a la normal de una cara vista por detrás, así que todo lo visible queda iluminado del lado equivocado. Pasa con el descarte de caras traseras activado o no, y un modelo con bobinado *y* normales invertidos a la vez sigue viéndose sano, al menos en cajas vistas de frente. Las dos cosas se comprobaron renderizando la figura; la primera versión de este texto atribuía el negro al descarte de caras traseras y decía que el modelo se vería «hueco», y fue mirarlo lo que lo corrigió.
+
+`tests/test_blender_import.py::test_the_render_shows_each_side_where_its_caption_says` comprueba la herramienta leyendo los píxeles: cada eje cae en el lado que dice su rótulo, y el bastón de `box_figure` —un fixture con nariz, dedos de los pies y un bastón solo en la mano izquierda— aparece a la derecha visto desde +Z y a la izquierda desde −Z. Exportada en espejo, esa prueba falla. Lo que no puede comprobar, y la hoja tampoco, es si el modelo coincide con el juego: una exportación en espejo se ve perfectamente sana hasta que se pone al lado del original.
 
 **Criterio matemático de implementación.**
 
