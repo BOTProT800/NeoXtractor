@@ -18,16 +18,26 @@ Options::
     --clips a,b,c         only these clips
     --storage {auto,row_vector,column_vector}
     --role {global_bind,inverse_bind,local_bind}
-    --conversion {neox_flip_x,identity}
+    --conversion {identity,mirror_x}
     --no-trs              bake node matrices instead of writing TRS
+    --validate            run the Khronos glTF-Validator on the result
+                          (needs NEOX_GLTF_VALIDATOR, see tests/support/khronos.py)
+    --render [CLIP]       draw the result to <modelo>.png, with frames of CLIP
+                          if given (needs NEOX_BLENDER_PYTHON, see
+                          tools/render_glb.py)
 
 The overrides exist to test a hypothesis quickly when the defaults turn out
-not to fit a variant.
+not to fit a variant. ``--conversion mirror_x`` writes the mirror image on
+purpose: export both, open them side by side in a viewer, and compare with
+the game. No test can make that call for you (see ``NEOX_TO_GLTF``).
 """
 
 import argparse
 import hashlib
+import os
+import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -41,7 +51,7 @@ from core.mesh_converter.animation import clips_from_rgis  # noqa: E402
 from core.mesh_converter.formats import glb  # noqa: E402
 from core.mesh_converter.gltf_scene import build_scene  # noqa: E402
 from core.mesh_converter.skeleton import (  # noqa: E402
-    IDENTITY_CONVERSION,
+    MIRROR_X,
     NEOX_TO_GLTF,
     MatrixRole,
     MatrixStorage,
@@ -49,7 +59,8 @@ from core.mesh_converter.skeleton import (  # noqa: E402
 )
 from core.mesh_loader import MeshLoader  # noqa: E402
 
-CONVERSIONS = {"neox_flip_x": NEOX_TO_GLTF, "identity": IDENTITY_CONVERSION}
+#: Keyed by the conversion's own name, so the label cannot drift from what it does.
+CONVERSIONS = {conversion.name: conversion for conversion in (NEOX_TO_GLTF, MIRROR_X)}
 
 
 def heading(text):
@@ -73,7 +84,7 @@ def main() -> int:
         default=MatrixRole.GLOBAL_BIND.value,
     )
     parser.add_argument(
-        "--conversion", choices=sorted(CONVERSIONS), default="neox_flip_x"
+        "--conversion", choices=sorted(CONVERSIONS), default=NEOX_TO_GLTF.name
     )
     parser.add_argument("--no-trs", action="store_true")
     parser.add_argument(
@@ -83,6 +94,18 @@ def main() -> int:
     parser.add_argument(
         "--clips",
         help="comma separated clip names to include; default is all of them",
+    )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="run the Khronos glTF-Validator on the written file",
+    )
+    parser.add_argument(
+        "--render",
+        nargs="?",
+        const="",
+        metavar="CLIP",
+        help="render the written file to a picture, with frames of CLIP if given",
     )
     args = parser.parse_args()
 
@@ -202,6 +225,49 @@ def main() -> int:
     destination = Path(args.out) if args.out else source.with_suffix(".glb")
     destination.write_bytes(glb.convert(mesh, **options))
     print(f"\n  wrote {destination} ({destination.stat().st_size} bytes)")
+
+    status = 0
+    if args.validate:
+        status = max(status, validate(destination))
+    if args.render is not None:
+        status = max(status, render(destination, args.render))
+    return status
+
+
+def validate(destination: Path) -> int:
+    """Run the official validator; 1 if it reports errors."""
+    from tests.support import khronos
+
+    heading("Khronos glTF-Validator")
+    if not khronos.available():
+        print("  not available: install the gltf-validator npm package, point")
+        print("  NEOX_GLTF_VALIDATOR at it and put node on PATH")
+        return 1
+    (report,) = khronos.validate(destination)
+    print(textwrap.indent(khronos.summary(report), "  "))
+    return 1 if report["numErrors"] else 0
+
+
+def render(destination: Path, clip: str) -> int:
+    """Draw the export with Blender, so it can be compared with the game."""
+    heading("Picture")
+    interpreter = os.environ.get("NEOX_BLENDER_PYTHON")
+    if not interpreter:
+        print("  not available: set NEOX_BLENDER_PYTHON to an interpreter with bpy")
+        return 1
+    command = [interpreter, str(REPO_ROOT / "tools" / "render_glb.py"), str(destination)]
+    if clip:
+        command += ["--clip", clip]
+    process = subprocess.run(command, capture_output=True, text=True, check=False)
+    keep = ("clip ", "model ", "bounds ", "wrote ", "no clip", "no mesh", "the file")
+    for line in process.stdout.splitlines():
+        if line.startswith(keep):
+            print(f"  {line}")
+    if process.returncode != 0:
+        print(textwrap.indent(process.stderr[-2000:], "  "))
+        return 1
+    print("  Nothing here can tell a mirror image from the real thing. Compare")
+    print("  something asymmetric with the game before calling it good.")
     return 0
 
 

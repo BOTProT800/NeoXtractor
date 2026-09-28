@@ -30,6 +30,19 @@ jobs:
         shell: bash
         run: uv sync --locked --group dev
 
+      # The official Khronos glTF-Validator is only published on npm. Pinned,
+      # because tests/support/khronos.py lists the infos this version emits.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install the Khronos glTF-Validator
+        shell: bash
+        run: npm install --no-audit --no-fund --prefix "$RUNNER_TEMP/gltf-validator" gltf-validator@2.0.0-dev.3.10
+
       - name: Run tests
         shell: bash
+        env:
+          NEOX_GLTF_VALIDATOR: ${{ runner.temp }}/gltf-validator/node_modules/gltf-validator
         run: uv run pytest -q

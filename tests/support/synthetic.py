@@ -342,6 +342,179 @@ def asymmetric_character(joint_index_bits: int = 8) -> MeshData:
     )
 
 
+def multi_root_mesh():
+    """Two roots, one with a child: nothing may hang off the wrong tree."""
+    return make_mesh_data(
+        positions=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (5.5, 0.5, 0.0)],
+        faces=[(0, 1, 2), (1, 2, 3)],
+        bone_parents=[-1, -1, 0],
+        bone_names=["root_a", "root_b", "child_a"],
+        bone_matrices=[
+            row_vector_matrix((0.0, 0.0, 0.0)),
+            row_vector_matrix((5.0, 0.0, 0.0)),
+            row_vector_matrix((0.0, 3.0, 0.0), 25.0),
+        ],
+        joints=[(0, 0, 0, 0), (2, 0, 0, 0), (0, 0, 0, 0), (1, 0, 0, 0)],
+        weights=[(1.0, 0.0, 0.0, 0.0)] * 4,
+    )
+
+
+def reversed_storage_mesh():
+    """Parents stored strictly after their children."""
+    return make_mesh_data(
+        positions=[(0.5, 4.0, 0.0), (0.5, 2.0, 0.0), (0.5, 0.0, 0.0)],
+        faces=[(0, 1, 2)],
+        bone_parents=[1, 2, -1],
+        bone_names=["tip", "mid", "base"],
+        bone_matrices=[
+            row_vector_matrix((0.0, 4.0, 0.0), -30.0),
+            row_vector_matrix((0.0, 2.0, 0.0), 15.0),
+            row_vector_matrix((0.0, 0.0, 0.0)),
+        ],
+        joints=[(0, 0, 0, 0), (1, 0, 0, 0), (2, 0, 0, 0)],
+        weights=[(1.0, 0.0, 0.0, 0.0)] * 3,
+    )
+
+
+def bone_255_mesh():
+    """257 bones with a real influence on bone 255, which 8-bit data reserves."""
+    bone_count = 257
+    return make_mesh_data(
+        positions=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)],
+        faces=[(0, 1, 2)],
+        bone_parents=[-1] + list(range(bone_count - 1)),
+        bone_names=[f"bone_{index}" for index in range(bone_count)],
+        bone_matrices=[
+            row_vector_matrix((index * 0.05, index * 0.02, 0.0))
+            for index in range(bone_count)
+        ],
+        joints=[
+            (255, 65535, 65535, 65535),
+            (256, 65535, 65535, 65535),
+            (0, 65535, 65535, 65535),
+        ],
+        weights=[(1.0, 0.0, 0.0, 0.0)] * 3,
+        joint_index_bits=16,
+        mesh_type=5,
+    )
+
+
+def _box(low, high):
+    """
+    A box as 24 vertices with flat outward normals.
+
+    Each face is wound counter-clockwise seen from outside, which is checked
+    against its normal rather than trusted, so the box renders solid with
+    back faces culled.
+    """
+    (x0, y0, z0), (x1, y1, z1) = low, high
+    sides = [
+        ((1.0, 0.0, 0.0), [(x1, y0, z0), (x1, y1, z0), (x1, y1, z1), (x1, y0, z1)]),
+        ((-1.0, 0.0, 0.0), [(x0, y0, z0), (x0, y0, z1), (x0, y1, z1), (x0, y1, z0)]),
+        ((0.0, 1.0, 0.0), [(x0, y1, z0), (x0, y1, z1), (x1, y1, z1), (x1, y1, z0)]),
+        ((0.0, -1.0, 0.0), [(x0, y0, z0), (x1, y0, z0), (x1, y0, z1), (x0, y0, z1)]),
+        ((0.0, 0.0, 1.0), [(x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)]),
+        ((0.0, 0.0, -1.0), [(x0, y0, z0), (x0, y1, z0), (x1, y1, z0), (x1, y0, z0)]),
+    ]
+    positions, normals, quads = [], [], []
+    for normal, corners in sides:
+        a, b, c = (np.asarray(corner) for corner in corners[:3])
+        if np.dot(np.cross(b - a, c - a), normal) < 0.0:
+            corners = corners[::-1]
+        start = len(positions)
+        positions.extend(corners)
+        normals.extend([normal] * 4)
+        quads.append((start, start + 1, start + 2, start + 3))
+    return positions, normals, quads
+
+
+def box_figure() -> MeshData:
+    """
+    A blocky figure that looks the same to no mirror image of itself.
+
+    Meant for looking at, not only for asserting on: it has a nose on the
+    face, toes on the feet, and a staff in the **left** hand only. It stands on
+    Y = 0 with Y up and faces +Z, which is the glTF front, so its left hand is
+    at +X. Every box is bound entirely to one bone, and the bones carry L/R
+    names the way real rigs do.
+
+    Bone origins::
+
+        root (0, 0, 0) - pelvis (0, 1, 0) - spine (0, 1.5, 0) - head (0, 2.25, 0)
+        upperarm_l (0.35, 2.1, 0) - forearm_l (0.9, 2.1, 0)   the staff hand
+        upperarm_r (-0.35, 2.1, 0) - forearm_r (-0.9, 2.1, 0)
+        thigh_l (0.18, 1, 0) - calf_l (0.18, 0.5, 0), and the same at -X
+
+    Returns:
+    - A rigged :class:`MeshData`.
+    """
+    bones = [
+        ("root", None, (0.0, 0.0, 0.0)),
+        ("pelvis", "root", (0.0, 1.0, 0.0)),
+        ("spine", "pelvis", (0.0, 1.5, 0.0)),
+        ("head", "spine", (0.0, 2.25, 0.0)),
+        ("upperarm_l", "spine", (0.35, 2.1, 0.0)),
+        ("forearm_l", "upperarm_l", (0.9, 2.1, 0.0)),
+        ("upperarm_r", "spine", (-0.35, 2.1, 0.0)),
+        ("forearm_r", "upperarm_r", (-0.9, 2.1, 0.0)),
+        ("thigh_l", "pelvis", (0.18, 1.0, 0.0)),
+        ("calf_l", "thigh_l", (0.18, 0.5, 0.0)),
+        ("thigh_r", "pelvis", (-0.18, 1.0, 0.0)),
+        ("calf_r", "thigh_r", (-0.18, 0.5, 0.0)),
+    ]
+    index_of = {name: index for index, (name, _, _) in enumerate(bones)}
+
+    def limbs(side, sign):
+        """Arm and leg boxes for one side; sign is +1 for left, -1 for right."""
+
+        def span(a, b):
+            return (min(sign * a, sign * b), max(sign * a, sign * b))
+
+        def part(x_range, y_range, z_range, bone):
+            (xa, xb), (ya, yb), (za, zb) = span(*x_range), y_range, z_range
+            return ((xa, ya, za), (xb, yb, zb), f"{bone}_{side}")
+
+        return [
+            part((0.35, 0.9), (2.0, 2.2), (-0.08, 0.08), "upperarm"),
+            part((0.9, 1.4), (2.02, 2.18), (-0.07, 0.07), "forearm"),
+            part((0.06, 0.3), (0.5, 0.95), (-0.1, 0.1), "thigh"),
+            part((0.07, 0.29), (0.08, 0.5), (-0.09, 0.09), "calf"),
+            part((0.07, 0.29), (0.0, 0.08), (-0.1, 0.3), "calf"),  # foot, toes to +Z
+        ]
+
+    parts = [
+        ((-0.33, 0.9, -0.15), (0.33, 1.2, 0.15), "pelvis"),
+        ((-0.35, 1.2, -0.17), (0.35, 2.2, 0.17), "spine"),
+        ((-0.2, 2.25, -0.2), (0.2, 2.7, 0.2), "head"),
+        ((-0.05, 2.38, 0.2), (0.05, 2.5, 0.34), "head"),  # the nose: the front
+        ((1.4, 1.2, -0.04), (1.5, 3.1, 0.04), "forearm_l"),  # the staff: the left
+        *limbs("l", 1.0),
+        *limbs("r", -1.0),
+    ]
+
+    positions, normals, faces, joints = [], [], [], []
+    for low, high, bone in parts:
+        box_positions, box_normals, quads = _box(low, high)
+        start = len(positions)
+        positions.extend(box_positions)
+        normals.extend(box_normals)
+        joints.extend([(index_of[bone], 0, 0, 0)] * len(box_positions))
+        for a, b, c, d in quads:
+            faces.append((start + a, start + b, start + c))
+            faces.append((start + a, start + c, start + d))
+
+    return make_mesh_data(
+        positions=positions,
+        normals=normals,
+        faces=faces,
+        bone_parents=[-1 if parent is None else index_of[parent] for _, parent, _ in bones],
+        bone_names=[name for name, _, _ in bones],
+        bone_matrices=[row_vector_matrix(origin) for _, _, origin in bones],
+        joints=joints,
+        weights=[(1.0, 0.0, 0.0, 0.0)] * len(positions),
+    )
+
+
 def build_rgis_file(
     *,
     reference,
