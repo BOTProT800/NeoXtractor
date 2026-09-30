@@ -6,6 +6,8 @@ needed; the message boxes live in the callers, which is why this function
 returns an error string instead of showing one itself.
 """
 
+import os
+
 import numpy as np
 import pytest
 
@@ -125,7 +127,7 @@ def sibling_animations(monkeypatch):
 
     def install(names):
         monkeypatch.setattr(module, "get_npk_file", lambda: _StubNPK(names))
-        return module._sibling_animations
+        return module._npk_animations
 
     return install
 
@@ -158,19 +160,39 @@ def test_animations_beside_the_mesh_are_found(sibling_animations):
         ]
     )
 
-    found = find(_ViewerWithFile(asymmetric_character(), mesh_entry))
+    found, beside = find(_ViewerWithFile(asymmetric_character(), mesh_entry))
 
-    # Backslash paths are normalised on the way out.
-    assert found == [("tiejiayong/tiejiayong.gis", 1)]
+    # Backslash paths are normalised on the way out; the file beside the mesh
+    # comes first, the rest of the NPK after it.
+    assert beside == 1
+    assert found == [("tiejiayong/tiejiayong.gis", 1), ("otherguy/otherguy.gis", 3)]
 
 
-def test_animations_in_other_folders_are_not_offered(sibling_animations):
-    mesh_entry = npk_path("a", "thing.mesh")
+def test_the_shared_library_in_other_folders_is_offered(sibling_animations):
+    """
+    Playable characters keep their clips away from the mesh.
+
+    In ``male.npk`` the 2402 ``.gis`` files live in ``common/dongzuoku_gis/``
+    and ``<character>/common_gis/``. Offering only the mesh's folder left a
+    player model with nothing to pick, which is how a biped rig came out of
+    the GUI with its skeleton and no animations.
+    """
+    mesh_entry = npk_path("hero", "hero_body.mesh")
     find = sibling_animations(
-        [mesh_entry, npk_path("b", "one.gis"), npk_path("c", "two.gis")]
+        [
+            mesh_entry,
+            npk_path("common" + SEP + "dongzuoku_gis", "walk_f.gis"),
+            npk_path("hero" + SEP + "common_gis", "idle.gis"),
+        ]
     )
 
-    assert find(_ViewerWithFile(asymmetric_character(), mesh_entry)) == []
+    found, beside = find(_ViewerWithFile(asymmetric_character(), mesh_entry))
+
+    assert beside == 0
+    assert [name for name, _ in found] == [
+        "common/dongzuoku_gis/walk_f.gis",
+        "hero/common_gis/idle.gis",
+    ]
 
 
 def test_several_siblings_come_back_sorted(sibling_animations):
@@ -185,8 +207,9 @@ def test_several_siblings_come_back_sorted(sibling_animations):
         ]
     )
 
-    found = find(_ViewerWithFile(asymmetric_character(), mesh_entry))
+    found, beside = find(_ViewerWithFile(asymmetric_character(), mesh_entry))
 
+    assert beside == 3
     assert [name for name, _ in found] == [
         "lib/attack.gis",
         "lib/idle.gis",
@@ -288,3 +311,34 @@ class TestMergingSeveralAnimationFiles:
             "walk_f",
             "attack",
         ]
+
+
+class TestAnimationPicker:
+    """The dialog preselects what sits beside the mesh, and nothing else."""
+
+    @pytest.fixture(autouse=True)
+    def headless(self, monkeypatch):
+        """
+        No screen needed for a dialog. Set through monkeypatch so the setting
+        does not leak into later tests that start a real viewer.
+        """
+        if not os.environ.get("QT_QPA_PLATFORM"):
+            monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+    def picker(self, names, beside):
+        pytest.importorskip("PySide6")
+        from PySide6 import QtWidgets
+
+        from gui.widgets.animation_picker import AnimationPicker
+
+        self.application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        return AnimationPicker(names, beside=beside)
+
+    def test_the_files_beside_the_mesh_start_selected(self):
+        dialog = self.picker(["npc/npc.gis", "common/walk.gis", "common/idle.gis"], beside=1)
+        assert dialog.selected_names() == ["npc/npc.gis"]
+
+    def test_a_library_alone_starts_with_nothing_selected(self):
+        """Picking one of thousands of clips at random would be a guess."""
+        dialog = self.picker(["common/walk.gis", "common/idle.gis"], beside=0)
+        assert dialog.selected_names() == []

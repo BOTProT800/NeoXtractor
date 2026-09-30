@@ -22,33 +22,37 @@ if TYPE_CHECKING:
     from gui.windows.viewer_tab_window import ViewerTabWindow
 
 
-def _sibling_animations(viewer: "MeshViewer") -> list[tuple[str, int]]:
+def _npk_animations(viewer: "MeshViewer") -> tuple[list[tuple[str, int]], int]:
     """
-    Find ``.gis`` entries sitting in the same NPK folder as the open mesh.
+    Every ``.gis`` entry in the open NPK, the ones beside the mesh first.
 
-    A mesh and the animations that drive it ship together: in the samples,
-    25 of 26 NPC meshes have a ``.gis`` in their own folder, and player
-    characters keep a shared action library in the same NPK. So the file is
-    almost always already open, and there is no reason to make the user go
-    hunting for it on disk.
+    A mesh and the animations that drive it ship in the same NPK, but not
+    always in the same folder. In the samples 25 of 26 NPC meshes have a
+    ``.gis`` in their own folder, while playable characters draw on a shared
+    library elsewhere in the NPK (``common/dongzuoku_gis/``,
+    ``<character>/common_gis/``; 2402 files in ``male.npk``). Offering only
+    the mesh's folder left a player model with nothing to pick, so it could
+    only be exported without animations.
 
     Returns:
-    - ``(entry name, row)`` pairs, sorted by name.
+    - ``(entries, beside)``: ``(entry name, row)`` pairs, of which the first
+      ``beside`` come from the mesh's own folder. Each group is sorted by name.
     """
     entry = viewer.get_file()
     npk = get_npk_file()
     if entry is None or npk is None:
-        return []
+        return [], 0
 
     mesh_name = (getattr(entry, "filename", "") or "").replace("\\", "/")
     folder = posixpath.dirname(mesh_name)
 
-    found = []
+    beside, elsewhere = [], []
     for row, index in enumerate(npk.indices):
         name = (getattr(index, "filename", "") or "").replace("\\", "/")
-        if name.lower().endswith(".gis") and posixpath.dirname(name) == folder:
-            found.append((name, row))
-    return sorted(found)
+        if name.lower().endswith(".gis"):
+            group = beside if posixpath.dirname(name) == folder else elsewhere
+            group.append((name, row))
+    return sorted(beside) + sorted(elsewhere), len(beside)
 
 
 def _read_npk_entry(row: int) -> bytes | None:
@@ -115,8 +119,9 @@ def _load_animation_clips(window, viewer: "MeshViewer"):
     """
     Pick one or more ``.gis`` files and convert their clips onto the mesh.
 
-    Prefers animation files sitting beside the mesh in the open NPK, and falls
-    back to a file dialog when there are none or the user asks for one.
+    Offers every animation file in the open NPK, those beside the mesh first
+    and selected, and falls back to a file dialog when there are none or the
+    user asks for one.
 
     Returns:
     - ``(clips, error)``. ``clips`` is None when the user cancelled.
@@ -134,15 +139,17 @@ def _load_animation_clips(window, viewer: "MeshViewer"):
         return None, "this mesh has no usable skeleton, so clips cannot be attached"
 
     sources: list[tuple[str, bytes]] = []
-    siblings = _sibling_animations(viewer)
-    browse = not siblings
+    available, beside = _npk_animations(viewer)
+    browse = not available
 
-    if siblings:
-        chosen, browse = pick_animations(window, [name for name, _ in siblings])
+    if available:
+        chosen, browse = pick_animations(
+            window, [name for name, _ in available], beside=beside
+        )
         if chosen is None and not browse:
             return None, None
         if chosen:
-            rows = dict(siblings)
+            rows = dict(available)
             for name in chosen:
                 payload = _read_npk_entry(rows[name])
                 if payload is None:

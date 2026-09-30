@@ -1,6 +1,6 @@
 """A dialog for picking one or more NeoX animation files out of an NPK."""
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtWidgets
 
 
 class AnimationPicker(QtWidgets.QDialog):
@@ -13,7 +13,9 @@ class AnimationPicker(QtWidgets.QDialog):
     click.
     """
 
-    def __init__(self, names: list[str], parent=None, allow_browse: bool = True):
+    def __init__(
+        self, names: list[str], parent=None, allow_browse: bool = True, beside: int = 0
+    ):
         super().__init__(parent)
         self.setWindowTitle("Choose animations")
         self.resize(560, 460)
@@ -21,12 +23,20 @@ class AnimationPicker(QtWidgets.QDialog):
         self._browse_requested = False
 
         layout = QtWidgets.QVBoxLayout(self)
-        layout.addWidget(
-            QtWidgets.QLabel(
-                f"{len(names)} animation file(s) found next to this mesh. "
-                "Select one or more."
+        if beside:
+            summary = (
+                f"{len(names)} animation file(s) in the open NPK. The {beside} "
+                "beside this mesh come first and are selected."
             )
-        )
+        else:
+            summary = (
+                f"{len(names)} animation file(s) in the open NPK, none beside this "
+                "mesh. Playable characters use the shared library: filter by "
+                "name, e.g. walk or idle, and select the clips to include."
+            )
+        label = QtWidgets.QLabel(summary)
+        label.setWordWrap(True)
+        layout.addWidget(label)
 
         self._filter = QtWidgets.QLineEdit(self)
         self._filter.setPlaceholderText("Filter by name, e.g. walk or crouch")
@@ -40,8 +50,8 @@ class AnimationPicker(QtWidgets.QDialog):
         )
         for name in names:
             self._list.addItem(QtWidgets.QListWidgetItem(name))
-        if names:
-            self._list.item(0).setSelected(True)
+        for row in range(min(beside, len(names))):
+            self._list.item(row).setSelected(True)
         self._list.itemDoubleClicked.connect(lambda _item: self.accept())
         layout.addWidget(self._list, 1)
 
@@ -113,7 +123,9 @@ class AnimationPicker(QtWidgets.QDialog):
         ]
 
 
-def pick_animations(parent, names: list[str]) -> tuple[list[str] | None, bool]:
+def pick_animations(
+    parent, names: list[str], beside: int = 0
+) -> tuple[list[str] | None, bool]:
     """
     Run the picker.
 
@@ -121,7 +133,7 @@ def pick_animations(parent, names: list[str]) -> tuple[list[str] | None, bool]:
     - ``(names, browse)``. ``names`` is None when the user cancelled;
       ``browse`` is True when they asked to pick a file from disk instead.
     """
-    dialog = AnimationPicker(names, parent)
+    dialog = AnimationPicker(names, parent, beside=beside)
     if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
         return None, False
     if dialog.browse_requested:
