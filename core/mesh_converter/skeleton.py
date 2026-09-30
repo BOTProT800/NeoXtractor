@@ -126,37 +126,41 @@ class CoordinateConversion:
 #: No conversion; export exactly the source basis.
 IDENTITY_CONVERSION = CoordinateConversion("identity", np.identity(4))
 
-#: Mirror X. The viewer (``mesh_renderer``) and the IQE exporter used to apply
-#: this, and showed the mirror image of the game until 28 September 2026. It is
-#: **not** what glTF needs, see :data:`NEOX_TO_GLTF`; it is kept to export the
-#: mirror image on purpose, for comparing the two next to the game.
+#: Mirror X: the basis change between NeoX and any right-handed format.
 MIRROR_X = CoordinateConversion("mirror_x", np.diag(np.array([-1.0, 1.0, 1.0, 1.0])))
 
-#: NeoX to glTF: nothing to do.
+#: NeoX to glTF: mirror X. **NeoX is left-handed**, glTF right-handed.
 #:
-#: **What decides this is a look at the model, not a measurement.** Until
-#: 27 September 2026 the export mirrored X, inherited from the viewer without
-#: checking; opening ``tiejiayong_03`` in Blender showed a mirror image of the
-#: model. Reversing the winding to match had kept the shading right, so it
-#: only showed in an asymmetric detail.
+#: Settled from the data, on 30 September 2026, by a real player character
+#: (47 Biped bones, ``biped_l_hand``, ``biped_r_toe0``...):
 #:
-#: Two measurements were once offered as proof here. Neither can tell a mirror
-#: apart, and ``TestHandedness`` keeps that on record:
+#: * It faces +Z: the toes sit ahead of the ankles in +Z and the third person
+#:   camera bone (``cam_tpp``) hangs 22 units behind in -Z.
+#: * Its ``biped_l_*`` bones sit at -X. Facing +Z with Y up, the left side is
+#:   -X in a left-handed basis and +X in a right-handed one. Read as
+#:   right-handed, the side the rig calls left landed on the character's right
+#:   (agreement -0.97); mirrored, it lands on its left.
+#: * Its weapon bones (``gun_ref``, ``ik_weapon``) hang from ``biped_r_wp``,
+#:   the right hand, as a shooter's rifle should.
 #:
-#: * **Winding against stored normals** (mean dot ``+0.99``, 100% of triangles
-#:   positive on ``tiejiayong_03`` and ``jianzao_dunpai``). It proves the file
-#:   is self-consistent, nothing more: ``cross(M a, M b) = det(M) M cross(a, b)``
-#:   for a mirror ``M``, so mirroring positions and normals *and* reversing the
-#:   winding gives exactly the same agreement. A left-handed source with
-#:   clockwise front faces scores the same ``+0.99``.
-#: * **Up axis.** ``jianzao_dunpai`` spans Y from 0.05 to 20.06 with X
-#:   symmetric about zero. That settles Y up; an X symmetric extent is, by
-#:   definition, the one thing an X mirror leaves unchanged.
+#: The community tools agree. zhouhang95/neox_tools mirrors X for OBJ and IQE
+#: and only turns the model 180 degrees for left-handed PMX; its Identity V
+#: fork maps ``bip001_l_*`` onto MMD's left bones through that same turn,
+#: which only lands on the character's left if NeoX is left-handed. The
+#: viewer and the IQE exporter here mirrored X from the start.
 #:
-#: What *would* settle it from the data: an asymmetric feature compared with
-#: the game, text in a texture, or left/right named bones seen against the
-#: direction the character faces.
-NEOX_TO_GLTF = IDENTITY_CONVERSION
+#: From 27 to 30 September 2026 this was the identity, after ``tiejiayong_03``
+#: (an NPC without left/right bone names) was judged mirrored against the
+#: game. Every measurement above contradicts that look. Two measurements
+#: offered for it cannot tell a mirror apart, and ``TestHandedness`` keeps
+#: that on record: winding against stored normals is self-consistency only
+#: (``cross(M a, M b) = det(M) M cross(a, b)`` for a mirror ``M``, so a mirror
+#: plus reversed winding scores the same), and an X-symmetric extent is the
+#: one thing an X mirror leaves unchanged.
+#:
+#: ``core.mesh_converter.handedness`` repeats the bone-name check on any rig
+#: with left/right names, so the next model can say so for itself.
+NEOX_TO_GLTF = MIRROR_X
 
 
 @dataclass

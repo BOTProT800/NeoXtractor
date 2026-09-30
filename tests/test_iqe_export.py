@@ -6,10 +6,10 @@ The convention comes from the format's own tools
 writes Blender's right-handed coordinates unchanged and reverses every
 triangle ("Quake winding is reversed"); its compiler loads an OBJ by rotating
 it to Z up (``.zxy()``, not a mirror), reversing the triangles and flipping V.
-So an IQE is right-handed, like NeoX data, with clockwise front faces.
+So an IQE is right-handed, with clockwise front faces.
 
-This exporter used to mirror X. That showed the model as the mirror image of
-the game, which is what a person comparing the two had seen for the GLB.
+NeoX is left-handed (see ``NEOX_TO_GLTF``), so X is mirrored on the way out.
+That mirror already turns NeoX's triangles clockwise, which is what IQE wants.
 """
 
 import numpy as np
@@ -41,13 +41,14 @@ def read_iqe(payload: bytes) -> dict:
     }
 
 
-def test_positions_and_normals_are_not_mirrored():
+def test_positions_and_normals_are_mirrored_in_x():
     figure = box_figure()
     document = read_iqe(iqe.convert(figure))
 
-    assert np.allclose(document["vp"], figure.mesh.position)
-    assert np.allclose(document["vn"], figure.mesh.normal)
-    # The staff is in the figure's left hand, at +X.
+    mirror = np.array([-1.0, 1.0, 1.0])
+    assert np.allclose(document["vp"], np.asarray(figure.mesh.position) * mirror)
+    assert np.allclose(document["vn"], np.asarray(figure.mesh.normal) * mirror)
+    # The staff is in the figure's left hand: -X in NeoX, +X once mirrored.
     assert document["vp"][:, 0].max() == pytest.approx(1.5)
 
 
@@ -65,14 +66,15 @@ def test_front_faces_are_clockwise():
     assert (agreement < 0.0).all()
 
 
-def test_joint_poses_are_local_and_not_mirrored():
+def test_joint_poses_are_local_and_mirrored():
     """
     Parents stored after their children, and bones turned about Z.
 
     ``base`` at the origin, ``mid`` at (0, 2, 0) turned 15 degrees, ``tip`` at
     (0, 4, 0) turned -30: relative to ``mid``, ``tip`` is turned -45 degrees,
     and its offset of (0, 2, 0) in the model reads as that vector turned by
-    -15 degrees in ``mid``'s frame.
+    -15 degrees in ``mid``'s frame. Through the X mirror a turn about Z
+    changes sign, and so does the offset's X.
     """
     mesh = reversed_storage_mesh()
     document = read_iqe(iqe.convert(mesh))
@@ -86,9 +88,9 @@ def test_joint_poses_are_local_and_not_mirrored():
 
     turn = np.radians(-15.0)
     up_mid = np.array([-np.sin(turn), np.cos(turn), 0.0])
-    assert np.allclose(translation, 2.0 * up_mid, atol=1e-6)
+    assert np.allclose(translation, 2.0 * up_mid * np.array([-1.0, 1.0, 1.0]), atol=1e-6)
 
-    half = np.radians(-45.0) / 2.0
+    half = np.radians(45.0) / 2.0
     expected = np.array([0.0, 0.0, np.sin(half), np.cos(half)])
     got = np.array([qx, qy, qz, qw])
     assert np.allclose(got, expected, atol=1e-6) or np.allclose(got, -expected, atol=1e-6)

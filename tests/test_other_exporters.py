@@ -189,11 +189,15 @@ class TestSmd:
         SMD stores each bone relative to its parent.
 
         The old code wrote a global slot that was always zero, and treated it
-        as if it were already parent-relative.
+        as if it were already parent-relative. SMD is right-handed, so the
+        origins come out mirrored in X, like the glTF export's.
         """
         mesh = asymmetric_character()
         nodes, skeleton, _ = parse_smd(smd_format.convert(mesh))
-        expected = expected_global_origins(mesh)
+        expected = {
+            name: origin * np.array([-1.0, 1.0, 1.0])
+            for name, origin in expected_global_origins(mesh).items()
+        }
         index_of = {name: index for index, name in enumerate(mesh.bones.names)}
 
         for name, origin in expected.items():
@@ -208,12 +212,14 @@ class TestSmd:
         mesh = rotated_rig()
         _, skeleton, _ = parse_smd(smd_format.convert(mesh))
 
-        # "base" is a root, so its local rotation is its global one: 20 deg Z.
+        # Seen through the X mirror, turns about Z (and Y) change sign and
+        # turns about X keep theirs.
+        # "base" is a root, so its local rotation is its global one: -20 deg Z.
         assert np.allclose(
-            recompose_euler(skeleton[0][1]), rotation("z", 20.0), atol=1e-5
+            recompose_euler(skeleton[0][1]), rotation("z", -20.0), atol=1e-5
         )
         # "mid" sits under it, so the residual is the parent's turn undone.
-        expected_local = rotation("z", 20.0).T @ rotation("x", -35.0)
+        expected_local = rotation("z", -20.0).T @ rotation("x", -35.0)
         assert np.allclose(recompose_euler(skeleton[1][1]), expected_local, atol=1e-5)
 
     def test_rotations_are_not_hardcoded_to_zero(self):
@@ -303,9 +309,13 @@ class TestPmx:
         return pymeshio_reader.read_from_file(str(target))
 
     def test_bone_positions_are_absolute_rest_origins(self, tmp_path):
+        """Absolute origins, turned 180 degrees about Y to face MMD's camera."""
         mesh = asymmetric_character()
         model = self.read_back(pmx_format.convert(mesh), tmp_path)
-        expected = expected_global_origins(mesh)
+        expected = {
+            name: origin * np.array([-1.0, 1.0, -1.0])
+            for name, origin in expected_global_origins(mesh).items()
+        }
 
         written = {
             bone.name: np.array([bone.position.x, bone.position.y, bone.position.z])
@@ -408,11 +418,12 @@ class TestEulerHelper:
 
 class TestPmxHandedness:
     """
-    MMD is left-handed, NeoX data right-handed: the PMX has to mirror.
+    MMD is left-handed, and so is NeoX: the PMX must not mirror.
 
     The first test pins what the file holds. It cannot say whether that is
-    right; the round trip through mmd_tools below can, and it is what showed
-    the unconverted PMX as the mirror image of the game.
+    right; the round trip through mmd_tools below can. When this exporter
+    mirrored (on the premise that NeoX was right-handed), that round trip put
+    the rig's left bones on the character's right.
     """
 
     def read_back(self, payload, tmp_path):
@@ -421,7 +432,7 @@ class TestPmxHandedness:
         target.write_bytes(payload)
         return pymeshio_reader.read_from_file(str(target))
 
-    def test_the_file_holds_the_figure_mirrored_in_z(self, tmp_path):
+    def test_the_file_holds_the_figure_turned_not_mirrored(self, tmp_path):
         from tests.support.synthetic import box_figure
 
         figure = box_figure()
@@ -429,16 +440,17 @@ class TestPmxHandedness:
 
         positions = np.array([[v.position.x, v.position.y, v.position.z] for v in model.vertices])
         normals = np.array([[v.normal.x, v.normal.y, v.normal.z] for v in model.vertices])
-        mirror = np.array([1.0, 1.0, -1.0])
-        assert np.allclose(positions, np.asarray(figure.mesh.position) * mirror, atol=1e-6)
-        assert np.allclose(normals, np.asarray(figure.mesh.normal) * mirror, atol=1e-6)
+        turn = np.array([-1.0, 1.0, -1.0])
+        assert np.allclose(positions, np.asarray(figure.mesh.position) * turn, atol=1e-6)
+        assert np.allclose(normals, np.asarray(figure.mesh.normal) * turn, atol=1e-6)
 
         bones = {bone.name: (bone.position.x, bone.position.y, bone.position.z) for bone in model.bones}
         assert bones["forearm_l"] == pytest.approx((0.9, 2.1, 0.0))
 
-        # Mirroring turns triangles inside out; the order is reversed to match,
-        # so the file still agrees with its own normals.
+        # A turn keeps the winding, so the triangles are written as stored and
+        # the file still agrees with its own normals.
         faces = np.asarray(model.indices).reshape(-1, 3)
+        assert np.array_equal(faces, np.asarray(figure.mesh.face))
         geometric = np.cross(
             positions[faces[:, 1]] - positions[faces[:, 0]],
             positions[faces[:, 2]] - positions[faces[:, 0]],
@@ -449,11 +461,11 @@ class TestPmxHandedness:
         not (os.environ.get("NEOX_BLENDER_PYTHON") and os.environ.get("NEOX_MMD_TOOLS")),
         reason="set NEOX_BLENDER_PYTHON and NEOX_MMD_TOOLS (a blender_mmd_tools checkout)",
     )
-    def test_mmd_tools_reads_back_the_figure_unmirrored(self, tmp_path):
+    def test_mmd_tools_shows_what_the_glb_shows(self, tmp_path):
         """
-        Through mmd_tools and Blender's glTF exporter, the figure comes back as
-        it went in: nose at +Z, staff at +X. Unconverted, the nose came back at
-        -Z with the staff still at +X, which is the mirror image.
+        Through mmd_tools and Blender's glTF exporter, the figure comes back
+        exactly as the GLB export writes it: X mirrored, nose at +Z, the staff
+        in the left hand at +X.
         """
         import subprocess
 
@@ -486,7 +498,7 @@ class TestPmxHandedness:
                 for primitive in mesh["primitives"]
             ]
         )
-        source_positions = np.asarray(figure.mesh.position)
+        source_positions = np.asarray(figure.mesh.position) * np.array([-1.0, 1.0, 1.0])
         # mmd_tools may split or merge vertices; compare as point sets.
         for points, others in ((back, source_positions), (source_positions, back)):
             nearest = np.min(

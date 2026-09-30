@@ -1,11 +1,11 @@
 """
 NeoXtractor's own viewer must show the model the export shows.
 
-For a while it did not: the GLB export stopped mirroring X after the model was
-compared with the game, and the viewer kept mirroring, so the two showed
-mirror images of each other. No test noticed, because each side agreed with
-its own idea of the data. The check that did was a picture of each, side by
-side.
+NeoX is left-handed and the viewer's camera right-handed, so the viewer
+mirrors X, as the glTF export does. For a few days in September 2026 first
+the export and then the viewer dropped that mirror; each side agreed with its
+own idea of the data and no test noticed. A real rig's left/right bone names
+did (see ``NEOX_TO_GLTF``).
 
 The first test pins what the viewer uploads. The second opens the real viewer
 widget, takes its picture and reads the pixels. It needs a screen, so it runs
@@ -29,14 +29,23 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CAPTURE = REPO_ROOT / "tools" / "capture_viewer.py"
 
 
-def test_the_viewer_draws_the_positions_as_stored():
+def test_the_viewer_draws_what_the_glb_export_writes():
+    """X mirrored, triangles turned back, bones mirrored with the mesh."""
+    from core.mesh_converter.formats import glb
+    from tests.support.gltf_reader import read_any
+
     figure = box_figure()
     processed = ProcessedMeshData(figure)
 
-    assert np.allclose(processed.vertices[:, :3], figure.mesh.position)
-    assert np.allclose(processed.vertices[:, 3:], figure.mesh.normal)
-    assert np.array_equal(processed.indices, np.asarray(figure.mesh.face))
+    document = read_any(glb.convert(figure))
+    primitive = document.json_data["meshes"][0]["primitives"][0]
+    assert np.allclose(processed.vertices[:, :3], document.accessor(primitive["attributes"]["POSITION"]), atol=1e-6)
+    assert np.allclose(processed.vertices[:, 3:], document.accessor(primitive["attributes"]["NORMAL"]), atol=1e-6)
 
+    faces = np.asarray(figure.mesh.face)
+    assert np.array_equal(processed.indices, faces[:, [1, 0, 2]])
+
+    # The left forearm: -X in NeoX, +X on screen as in the GLB.
     forearm_l = figure.bones.names.index("forearm_l")
     assert np.allclose(processed.bone_positions[forearm_l], (0.9, 2.1, 0.0))
 
@@ -46,16 +55,16 @@ def test_the_viewer_draws_the_positions_as_stored():
     [
         (OrthogonalDirection.FRONT, False, (0.0, 0.0, 1.0)),
         (OrthogonalDirection.FRONT, True, (0.0, 0.0, -1.0)),
-        (OrthogonalDirection.RIGHT, False, (1.0, 0.0, 0.0)),
-        (OrthogonalDirection.RIGHT, True, (-1.0, 0.0, 0.0)),
+        (OrthogonalDirection.RIGHT, False, (-1.0, 0.0, 0.0)),
+        (OrthogonalDirection.RIGHT, True, (1.0, 0.0, 0.0)),
     ],
 )
 def test_each_view_key_keeps_showing_the_same_side(direction, opposite, expected):
     """
-    Where the camera sits for the view keys, in model coordinates.
+    Where the camera sits for the view keys, on screen (the mirrored space).
 
-    Key 3 looked from the model's +X while the viewer mirrored X; it still
-    does now that it does not.
+    Key 3 puts the camera at the screen's -X, which is the model's +X in
+    NeoX coordinates: the side it has always shown.
     """
     from PySide6.QtGui import QVector4D
 
@@ -71,11 +80,11 @@ def test_each_view_key_keeps_showing_the_same_side(direction, opposite, expected
 )
 def test_the_real_viewer_shows_the_staff_where_the_export_does(tmp_path):
     """
-    The figure holds a staff in its left hand, at +X.
+    The figure holds a staff in its left hand.
 
     Seen from +Z (key 1) it must be on the right of the picture, as it is in
     ``tools/render_glb.py``'s front view of the exported GLB, and on the left
-    from -Z (Ctrl+1). With the old mirrored viewer both come out the other way.
+    from -Z (Ctrl+1). Without the viewer's mirror both come out the other way.
     """
     from PIL import Image
 

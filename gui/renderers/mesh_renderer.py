@@ -38,18 +38,22 @@ class ProcessedMeshData:
     def __init__(self, raw_data: MeshData):
         self.raw_data = raw_data
 
-        # Drawn exactly as stored. This used to mirror X (and swap two indices
-        # per triangle to keep the winding), which showed every model as the
-        # mirror image of the game and of the glTF export. NeoX data is already
-        # right-handed with Y up, like the OpenGL-style camera used here; see
-        # NEOX_TO_GLTF in core/mesh_converter/skeleton.py.
+        # NeoX is left-handed and this camera right-handed, so X is mirrored,
+        # as the glTF export does (NEOX_TO_GLTF in
+        # core/mesh_converter/skeleton.py has the evidence). It was removed
+        # for a few days in September 2026 and every model showed as the
+        # mirror image of the game: a player rig's left bones on its right.
         pos = np.array(raw_data.mesh.position)
+        pos[:, 0] = -pos[:, 0]  # Flip X-axis
         norm = np.array(raw_data.mesh.normal)
+        norm[:, 0] = -norm[:, 0]  # Flip X-axis for normals as well
 
         # Combine position and normals into a single array
         self.vertices = np.hstack((pos, norm))
 
-        self.indices = np.array(raw_data.mesh.face)
+        # The mirror turns triangles inside out; swapping two corners puts
+        # them back.
+        self.indices = np.array(raw_data.mesh.face)[:, [1, 0, 2]]
         self.wireframe_indices = self._generate_wireframe_indices(self.indices)
 
         # Calculate normal lines
@@ -75,15 +79,17 @@ class ProcessedMeshData:
         bone_lines = []
 
         for i, parent in enumerate(raw_data.bones.parents):
-            # Row-vector storage: the bone origin sits in the last row.
+            # Apply the flip to the bone's matrix
             matrix = raw_data.bones.matrix[i]
             pos = np.asarray(matrix.T)[:3, 3].copy()
+            pos[0] = -pos[0]  # Flip X-axis for bone positions
             bone_positions.append(pos)
 
             # Only create a line if the bone has a parent
             if parent != -1:
                 parent_matrix = raw_data.bones.matrix[parent]
                 parent_pos = np.asarray(parent_matrix.T)[:3, 3].copy()
+                parent_pos[0] = -parent_pos[0]
                 bone_lines.extend([pos, parent_pos])
 
         self.bone_positions = bone_positions

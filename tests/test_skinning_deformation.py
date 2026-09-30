@@ -42,6 +42,7 @@ def character():
         for node in gltf_data["skins"][0]["joints"]
     }
     positions = np.asarray(mesh.mesh.position, dtype=np.float64)
+    positions[:, 0] *= -1.0
     diagonal = float(np.linalg.norm(positions.max(axis=0) - positions.min(axis=0)))
 
     return {
@@ -82,10 +83,11 @@ class TestPivots:
         mesh = character["mesh"]
 
         for source_index, name in enumerate(mesh.bones.names):
-            # The file stores the origin in the last row (row-vector layout),
-            # and the export applies no basis change.
+            # The file stores the origin in the last row (row-vector layout);
+            # export mirrors X.
             stored = np.asarray(mesh.bones.matrix[source_index], dtype=np.float64)
             expected = stored[3, :3].copy()
+            expected[0] *= -1.0
 
             actual = bone_origin(gltf_data, node_index_of, name)
             assert np.allclose(actual, expected, atol=character["tolerance"]), (
@@ -277,7 +279,8 @@ class TestBlendedWeights:
         Weighted blending is checked with a known split.
 
         The vertex sits at the origin, bound 60/40 to a bone that translates by
-        (4, 0, 0) and one that stays put, so the answer is (2.4, 0, 0).
+        (4, 0, 0) and one that stays put, so the answer is (2.4, 0, 0) in
+        source space -- mirrored to (-2.4, 0, 0) on export.
         """
         mesh = make_mesh_data(
             positions=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)],
@@ -306,7 +309,7 @@ class TestBlendedWeights:
         skinned = skin_vertices(document, {mover_index: local})
 
         assert skinned[0] == pytest.approx([2.4, 0.0, 0.0], abs=1e-5)
-        assert skinned[1] == pytest.approx([1.0, 0.0, 0.0], abs=1e-5)
+        assert skinned[1] == pytest.approx([-1.0, 0.0, 0.0], abs=1e-5)
 
 
 def _random_rig(seed=7, bone_count=200, vertex_count=600, face_count=300):
@@ -377,6 +380,7 @@ class TestLargeRandomRig:
 
         skinned = skin_vertices(document)
         expected = np.asarray(mesh.mesh.position, dtype=np.float64)
+        expected[:, 0] *= -1.0
         diagonal = float(np.linalg.norm(expected.max(axis=0) - expected.min(axis=0)))
 
         assert np.abs(skinned - expected).max() < diagonal * POSITION_TOLERANCE_RATIO
@@ -414,6 +418,7 @@ class TestLargeRandomRig:
         )
 
         rest = np.asarray(mesh.mesh.position, dtype=np.float64)
+        rest[:, 0] *= -1.0
         diagonal = float(np.linalg.norm(rest.max(axis=0) - rest.min(axis=0)))
         tolerance = diagonal * POSITION_TOLERANCE_RATIO
 

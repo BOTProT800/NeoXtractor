@@ -2,7 +2,7 @@
 ``tools/diagnose_mesh.py`` end to end, on a .mesh and a .gis written to disk.
 
 Its ``--conversion`` option once offered ``neox_flip_x``, which had quietly
-become the identity when the default stopped mirroring: a label that no longer
+become the identity while the default did not mirror: a label that no longer
 did what it said, on the one switch meant for comparing a model against its
 mirror image. These tests hold each option to its name.
 """
@@ -39,16 +39,17 @@ def figure_files(tmp_path_factory):
         bone_names=bones.names,
         bone_matrices=bones.matrix,
     )
-    raised = (0.0, 0.0, float(np.sin(np.radians(35.0))), float(np.cos(np.radians(35.0))))
+    # The left arm is at -X in NeoX, so raising it turns it by a negative angle.
+    raised = (0.0, 0.0, float(np.sin(np.radians(-35.0))), float(np.cos(np.radians(-35.0))))
     clip = build_rgis_file(
-        reference=[("upperarm_l", (0.35, 0.6, 0.0), IDENTITY_Q, (1.0, 1.0, 1.0))],
+        reference=[("upperarm_l", (-0.35, 0.6, 0.0), IDENTITY_Q, (1.0, 1.0, 1.0))],
         clips=[
             {
                 "name": "wave",
                 "fps": 30,
                 "times": [0.0, 0.5, 1.0],
                 "tracks": [
-                    ("upperarm_l", (0.35, 0.6, 0.0), [IDENTITY_Q, raised, IDENTITY_Q], (1.0, 1.0, 1.0))
+                    ("upperarm_l", (-0.35, 0.6, 0.0), [IDENTITY_Q, raised, IDENTITY_Q], (1.0, 1.0, 1.0))
                 ],
             }
         ],
@@ -82,18 +83,18 @@ def test_each_conversion_does_what_its_name_says(figure_files, tmp_path):
     mesh_path, _, blob = figure_files
     source = np.asarray(blob.positions, dtype=np.float64)
 
+    default_out = tmp_path / "default.glb"
+    report = run_tool(mesh_path, "--out", default_out)
+    assert "coordinate conversion: mirror_x" in report
+    _, default = exported_positions(default_out)
+    # Half floats in the file: compare at their precision.
+    assert np.allclose(default, source * np.array([-1.0, 1.0, 1.0]), atol=2e-3)
+
     plain_out = tmp_path / "plain.glb"
-    report = run_tool(mesh_path, "--out", plain_out)
+    report = run_tool(mesh_path, "--out", plain_out, "--conversion", "identity")
     assert "coordinate conversion: identity" in report
     _, plain = exported_positions(plain_out)
-    # Half floats in the file: compare at their precision.
-    assert np.allclose(plain, source, atol=2e-3)
-
-    mirrored_out = tmp_path / "mirrored.glb"
-    report = run_tool(mesh_path, "--out", mirrored_out, "--conversion", "mirror_x")
-    assert "coordinate conversion: mirror_x" in report
-    _, mirrored = exported_positions(mirrored_out)
-    assert np.allclose(mirrored, plain * np.array([-1.0, 1.0, 1.0]), atol=1e-6)
+    assert np.allclose(plain, default * np.array([-1.0, 1.0, 1.0]), atol=1e-6)
 
 
 def test_the_clip_rides_along(figure_files, tmp_path):

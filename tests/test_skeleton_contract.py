@@ -319,11 +319,11 @@ class TestCoordinateConversion:
             MIRROR_X.matrix @ (transform @ point),
         )
 
-    def test_a_mirror_reverses_winding_and_the_default_does_not(self):
+    def test_a_mirror_reverses_winding_and_the_identity_does_not(self):
         assert MIRROR_X.flips_winding is True
         assert IDENTITY_CONVERSION.flips_winding is False
-        # NeoX needs no basis change, measured from winding against normals.
-        assert NEOX_TO_GLTF.flips_winding is False
+        # NeoX is left-handed; see NEOX_TO_GLTF for the evidence.
+        assert NEOX_TO_GLTF.flips_winding is True
 
     def test_converted_skeleton_still_rests_at_identity(self):
         matrices = [
@@ -338,7 +338,7 @@ class TestCoordinateConversion:
         # The mirrored bone origin has to follow the mirrored geometry.
         assert skeleton.bones[1].global_rest[:3, 3] == pytest.approx([-1.0, 2.0, 0.0])
 
-    def test_the_default_conversion_leaves_the_skeleton_alone(self):
+    def test_the_default_conversion_mirrors_the_skeleton_with_the_mesh(self):
         matrices = [
             row_vector_matrix((0.0, 0.0, 0.0)),
             row_vector_matrix((1.0, 2.0, 0.0), 30.0),
@@ -346,4 +346,4 @@ class TestCoordinateConversion:
 
         skeleton = build_skeleton([-1, 0], ["a", "b"], matrices, conversion=NEOX_TO_GLTF)
 
-        assert skeleton.bones[1].global_rest[:3, 3] == pytest.approx([1.0, 2.0, 0.0])
+        assert skeleton.bones[1].global_rest[:3, 3] == pytest.approx([-1.0, 2.0, 0.0])

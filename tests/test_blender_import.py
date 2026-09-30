@@ -178,7 +178,8 @@ def test_the_render_shows_each_side_where_its_caption_says(tmp_path):
       seen from the back;
     * the clip row shows the rig actually moving.
 
-    It does not, and cannot, say NeoX needs no mirror; see ``NEOX_TO_GLTF``.
+    It does not, and cannot, say which way NeoX is handed; the rig's own
+    left/right names can, see ``core.mesh_converter.handedness``.
     """
     from core.mesh_converter.animation import rotation_clip
     from core.mesh_converter.gltf_scene import build_scene
@@ -189,7 +190,7 @@ def test_the_render_shows_each_side_where_its_caption_says(tmp_path):
         skeleton,
         bone=4,  # upperarm_l, the staff arm
         axis="z",
-        degrees_over_time=[(0.0, 0.0), (0.5, 70.0), (1.0, 0.0)],
+        degrees_over_time=[(0.0, 0.0), (0.5, -70.0), (1.0, 0.0)],
         name="wave_left",
     )
     size = 240

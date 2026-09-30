@@ -441,21 +441,26 @@ class TestGeometry:
         positions = document.accessor(primitive["attributes"]["POSITION"])
 
         expected = np.asarray(mesh.mesh.position, dtype=np.float64)
+        expected[:, 0] *= -1.0
         assert np.allclose(positions, expected, atol=1e-6)
 
         mesh_node = gltf_data["nodes"][0]
         assert not {"matrix", "translation", "rotation", "scale"} & set(mesh_node)
 
-    def test_the_default_export_keeps_the_source_winding(self):
-        """
-        NeoX is already right-handed with counter-clockwise front faces.
-
-        Measured on real models: the geometric normal from the stored winding
-        agrees with the stored vertex normals for every triangle. So the
-        export applies no basis change and must not touch the winding.
-        """
+    def test_the_default_mirror_reverses_the_winding(self):
+        """NeoX is left-handed, so the default export mirrors X, and a mirror
+        turns every triangle inside out unless its order is reversed."""
         mesh = asymmetric_character()
         document = export_and_read(mesh)
+        primitive = document.json_data["meshes"][0]["primitives"][0]
+        indices = document.accessor(primitive["indices"]).reshape(-1, 3)
+
+        source = np.asarray(mesh.mesh.face, dtype=np.int64)
+        assert np.array_equal(indices, source[:, [0, 2, 1]])
+
+    def test_the_identity_conversion_keeps_the_source_winding(self):
+        mesh = asymmetric_character()
+        document = read_any(glb.convert(mesh, conversion=IDENTITY_CONVERSION))
         primitive = document.json_data["meshes"][0]["primitives"][0]
         indices = document.accessor(primitive["indices"]).reshape(-1, 3)
 
@@ -483,7 +488,7 @@ class TestGeometry:
         normals = document.accessor(primitive["attributes"]["NORMAL"])
 
         assert np.allclose(np.linalg.norm(normals, axis=1), 1.0, atol=1e-6)
-        assert np.allclose(normals[0], (1.0, 0.0, 0.0), atol=1e-6)
+        assert np.allclose(normals[0], (-1.0, 0.0, 0.0), atol=1e-6)
 
     def test_a_mesh_without_bones_still_exports(self):
         mesh = make_mesh_data(
@@ -547,14 +552,15 @@ class TestHandedness:
     """
     What the tests can and cannot say about mirroring.
 
-    They can pin the decision: the default export keeps the source basis, and
-    any conversion leaves a file whose winding agrees with its normals.
+    They can pin the decision: the default export mirrors X, and any
+    conversion leaves a file whose winding agrees with its normals.
 
-    They cannot make the decision. Whether NeoX needs a mirror was settled by
-    looking at ``tiejiayong_03`` in Blender, not by any assertion here: the
-    winding-against-normals measurement once offered as proof scores the same
-    on a mirror image, which ``test_winding_agreement_cannot_tell_a_mirror``
-    keeps on record so it is not offered as proof again.
+    They cannot make the decision. NeoX was shown to be left-handed by a real
+    rig's left/right bone names against the way it faces (see
+    ``NEOX_TO_GLTF``), not by any assertion here. The winding-against-normals
+    measurement once offered as proof of the opposite scores the same on a
+    mirror image, which ``test_winding_agreement_cannot_tell_a_mirror`` keeps
+    on record so it is not offered as proof again.
     """
 
     def winding_agrees_with_normals(self, positions, normals, faces):
@@ -596,12 +602,13 @@ class TestHandedness:
             normals=[(0.0, 0.0, 1.0)] * 8,
         )
 
-    def test_the_default_export_keeps_the_source_basis(self):
+    def test_the_default_export_mirrors_x(self):
         """
-        Pins the decision taken by looking at the model: no mirror.
+        Pins the decision: NeoX is left-handed, glTF right-handed.
 
         If this fails, the default conversion changed. Do not "fix" it without
-        opening a real model in a viewer and comparing it with the game.
+        running a real rig with left/right bone names through
+        ``core.mesh_converter.handedness``, and looking at it.
         """
         mesh = self.l_shape()
         assert self.winding_agrees_with_normals(
@@ -610,7 +617,8 @@ class TestHandedness:
 
         positions, normals, indices = self.exported(mesh)
 
-        assert np.allclose(positions, np.asarray(mesh.mesh.position), atol=1e-6)
+        mirrored = np.asarray(mesh.mesh.position) * np.array([-1.0, 1.0, 1.0])
+        assert np.allclose(positions, mirrored, atol=1e-6)
         assert self.winding_agrees_with_normals(positions, normals, indices) > 0.9, (
             "the exported winding disagrees with the exported normals, so the "
             "geometry was mirrored without the normals following"

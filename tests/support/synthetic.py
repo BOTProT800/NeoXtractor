@@ -434,16 +434,18 @@ def box_figure() -> MeshData:
 
     Meant for looking at, not only for asserting on: it has a nose on the
     face, toes on the feet, and a staff in the **left** hand only. It stands on
-    Y = 0 with Y up and faces +Z, which is the glTF front, so its left hand is
-    at +X. Every box is bound entirely to one bone, and the bones carry L/R
-    names the way real rigs do.
+    Y = 0 with Y up and faces +Z. It is written in NeoX coordinates, which are
+    left-handed, so its left hand is at **-X** here, the way a real rig's
+    ``biped_l_*`` bones are; exported to glTF (mirrored) it lands at +X, on
+    the right of the picture seen from the front. Every box is bound entirely
+    to one bone, and the bones carry L/R names the way real rigs do.
 
     Bone origins::
 
         root (0, 0, 0) - pelvis (0, 1, 0) - spine (0, 1.5, 0) - head (0, 2.25, 0)
-        upperarm_l (0.35, 2.1, 0) - forearm_l (0.9, 2.1, 0)   the staff hand
-        upperarm_r (-0.35, 2.1, 0) - forearm_r (-0.9, 2.1, 0)
-        thigh_l (0.18, 1, 0) - calf_l (0.18, 0.5, 0), and the same at -X
+        upperarm_l (-0.35, 2.1, 0) - forearm_l (-0.9, 2.1, 0)   the staff hand
+        upperarm_r (0.35, 2.1, 0) - forearm_r (0.9, 2.1, 0)
+        thigh_l (-0.18, 1, 0) - calf_l (-0.18, 0.5, 0), and the same at +X
 
     Returns:
     - A rigged :class:`MeshData`.
@@ -453,19 +455,19 @@ def box_figure() -> MeshData:
         ("pelvis", "root", (0.0, 1.0, 0.0)),
         ("spine", "pelvis", (0.0, 1.5, 0.0)),
         ("head", "spine", (0.0, 2.25, 0.0)),
-        ("upperarm_l", "spine", (0.35, 2.1, 0.0)),
-        ("forearm_l", "upperarm_l", (0.9, 2.1, 0.0)),
-        ("upperarm_r", "spine", (-0.35, 2.1, 0.0)),
-        ("forearm_r", "upperarm_r", (-0.9, 2.1, 0.0)),
-        ("thigh_l", "pelvis", (0.18, 1.0, 0.0)),
-        ("calf_l", "thigh_l", (0.18, 0.5, 0.0)),
-        ("thigh_r", "pelvis", (-0.18, 1.0, 0.0)),
-        ("calf_r", "thigh_r", (-0.18, 0.5, 0.0)),
+        ("upperarm_l", "spine", (-0.35, 2.1, 0.0)),
+        ("forearm_l", "upperarm_l", (-0.9, 2.1, 0.0)),
+        ("upperarm_r", "spine", (0.35, 2.1, 0.0)),
+        ("forearm_r", "upperarm_r", (0.9, 2.1, 0.0)),
+        ("thigh_l", "pelvis", (-0.18, 1.0, 0.0)),
+        ("calf_l", "thigh_l", (-0.18, 0.5, 0.0)),
+        ("thigh_r", "pelvis", (0.18, 1.0, 0.0)),
+        ("calf_r", "thigh_r", (0.18, 0.5, 0.0)),
     ]
     index_of = {name: index for index, (name, _, _) in enumerate(bones)}
 
     def limbs(side, sign):
-        """Arm and leg boxes for one side; sign is +1 for left, -1 for right."""
+        """Arm and leg boxes for one side; sign is -1 for left, +1 for right."""
 
         def span(a, b):
             return (min(sign * a, sign * b), max(sign * a, sign * b))
@@ -487,9 +489,9 @@ def box_figure() -> MeshData:
         ((-0.35, 1.2, -0.17), (0.35, 2.2, 0.17), "spine"),
         ((-0.2, 2.25, -0.2), (0.2, 2.7, 0.2), "head"),
         ((-0.05, 2.38, 0.2), (0.05, 2.5, 0.34), "head"),  # the nose: the front
-        ((1.4, 1.2, -0.04), (1.5, 3.1, 0.04), "forearm_l"),  # the staff: the left
-        *limbs("l", 1.0),
-        *limbs("r", -1.0),
+        ((-1.5, 1.2, -0.04), (-1.4, 3.1, 0.04), "forearm_l"),  # the staff: the left
+        *limbs("l", -1.0),
+        *limbs("r", 1.0),
     ]
 
     positions, normals, faces, joints = [], [], [], []

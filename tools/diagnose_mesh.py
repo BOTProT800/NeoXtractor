@@ -27,9 +27,11 @@ Options::
                           tools/render_glb.py)
 
 The overrides exist to test a hypothesis quickly when the defaults turn out
-not to fit a variant. ``--conversion mirror_x`` writes the mirror image on
-purpose: export both, open them side by side in a viewer, and compare with
-the game. No test can make that call for you (see ``NEOX_TO_GLTF``).
+not to fit a variant. The default, ``mirror_x``, is right for NeoX, which is
+left-handed; ``--conversion identity`` writes the stored coordinates
+unchanged, which is the mirror image, for comparing the two side by side.
+See ``NEOX_TO_GLTF`` for the evidence; the handedness report below repeats
+the check on any rig with left/right bone names.
 """
 
 import argparse
@@ -51,7 +53,7 @@ from core.mesh_converter.animation import clips_from_rgis  # noqa: E402
 from core.mesh_converter.formats import glb  # noqa: E402
 from core.mesh_converter.gltf_scene import build_scene  # noqa: E402
 from core.mesh_converter.skeleton import (  # noqa: E402
-    MIRROR_X,
+    IDENTITY_CONVERSION,
     NEOX_TO_GLTF,
     MatrixRole,
     MatrixStorage,
@@ -60,7 +62,9 @@ from core.mesh_converter.skeleton import (  # noqa: E402
 from core.mesh_loader import MeshLoader  # noqa: E402
 
 #: Keyed by the conversion's own name, so the label cannot drift from what it does.
-CONVERSIONS = {conversion.name: conversion for conversion in (NEOX_TO_GLTF, MIRROR_X)}
+CONVERSIONS = {
+    conversion.name: conversion for conversion in (NEOX_TO_GLTF, IDENTITY_CONVERSION)
+}
 
 
 def heading(text):

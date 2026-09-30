@@ -2,7 +2,7 @@
 
 from core.logger import get_logger
 from core.mesh_converter.skeleton import (
-    IDENTITY_CONVERSION,
+    NEOX_TO_GLTF,
     SkeletonError,
     build_skeleton,
     euler_xyz_from_matrix,
@@ -12,9 +12,10 @@ from core.mesh_loader import MeshData
 NAME = "Source Model Data (SMD) Format"
 EXTENSION = ".smd"
 
-# Geometry is written in the source basis, so the skeleton is resolved in that
-# same basis. Mesh and bones have to agree.
-CONVERSION = IDENTITY_CONVERSION
+# SMD is right-handed and NeoX left-handed, so X is mirrored, as for glTF;
+# mesh, normals and skeleton all go through it so they keep agreeing. The
+# up axis is left as stored (Y), as it always was.
+CONVERSION = NEOX_TO_GLTF
 
 #: Influence slots SMD writes per vertex.
 MAX_LINKS = 4
@@ -137,9 +138,12 @@ def convert(mesh: MeshData, flip_uv=False) -> bytes:
         material_name = f"material_{face_idx // 100}"  # Group faces by material
         smd_lines.append(f"{material_name}\n")
 
-        for vertex_index in [v1, v2, v3]:
-            pos = mesh.mesh.position[vertex_index]
-            norm = mesh.mesh.normal[vertex_index]
+        # A mirror turns the triangle inside out; swapping two corners puts
+        # it back, so winding and normals agree as they did in the source.
+        corners = [v1, v3, v2] if CONVERSION.flips_winding else [v1, v2, v3]
+        for vertex_index in corners:
+            pos = CONVERSION.point(mesh.mesh.position[vertex_index])
+            norm = CONVERSION.direction(mesh.mesh.normal[vertex_index])
             uv = mesh.mesh.uv[vertex_index]
 
             # Flip UV if specified

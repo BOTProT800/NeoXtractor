@@ -18,20 +18,20 @@ from core.mesh_loader import MeshData
 NAME = "Polygon Model eXtended (PMX) Format"
 EXTENSION = ".pmx"
 
-#: NeoX to PMX: mirror Z.
+#: NeoX to PMX: turn 180 degrees about Y. No mirror.
 #:
-#: MikuMikuDance is left-handed with Y up, and NeoX data is right-handed with
-#: Y up (see ``NEOX_TO_GLTF``). The reference PMX reader, mmd_tools
-#: (https://github.com/MMD-Blender/blender_mmd_tools), shows it: it brings a
-#: PMX into Blender with ``.xzy``, a mirror, and reverses every face. Written
-#: unconverted, as this exporter used to, the model came out in MMD as the
-#: mirror image of the game; imported back through mmd_tools, a staff held in
-#: the left hand ended up in the right.
+#: MikuMikuDance is left-handed with Y up, and so is NeoX (see
+#: ``NEOX_TO_GLTF``). The reference PMX reader, mmd_tools
+#: (https://github.com/MMD-Blender/blender_mmd_tools), shows MMD's side of it:
+#: it brings a PMX into Blender with ``.xzy``, a mirror. The turn only faces
+#: the model toward MMD's camera, which looks from -Z, as zhouhang95/neox_tools
+#: does with ``(-x, y, -z)``. Being a rotation, it keeps the winding.
 #:
-#: Z rather than X, because MMD's camera looks at a model from -Z: a figure
-#: that faces +Z here faces that camera there. Mesh, normals and bones all go
-#: through the same conversion, so they keep agreeing with each other.
-CONVERSION = CoordinateConversion("mirror_z", np.diag(np.array([1.0, 1.0, -1.0, 1.0])))
+#: For a few days in September 2026 this mirrored Z, on the premise that NeoX
+#: was right-handed; the rig's left bones then landed on the character's right.
+CONVERSION = CoordinateConversion(
+    "turn_y_180", np.diag(np.array([-1.0, 1.0, -1.0, 1.0]))
+)
 
 #: Influence slots a PMX Bdef4 vertex holds.
 MAX_LINKS = 4
@@ -204,8 +204,8 @@ def convert(mesh: MeshData) -> bytes:
             len(mesh.mesh.position),
         )
 
-    # Add faces. The mirror turns every triangle inside out, so the order is
-    # reversed to put it back, as mmd_tools does in the other direction.
+    # Add faces. A mirror would turn every triangle inside out and need the
+    # order reversed; the turn used here does not.
     for a, b, c in mesh.mesh.face:
         if CONVERSION.flips_winding:
             pmx_model.indices.extend((a, c, b))

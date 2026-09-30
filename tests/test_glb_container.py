@@ -112,6 +112,7 @@ class TestRoundTrip:
         positions = document.accessor(primitive["attributes"]["POSITION"])
 
         expected = np.asarray(mesh.mesh.position, dtype=np.float64)
+        expected[:, 0] *= -1.0
         assert np.allclose(positions, expected, atol=1e-6)
 
     def test_packaging_does_not_alter_the_rig(self):
@@ -171,6 +172,7 @@ class TestTrimesh:
         vertices = scene.geometry["NeoXMesh"].vertices
 
         expected = np.asarray(mesh.mesh.position, dtype=np.float64)
+        expected[:, 0] *= -1.0
         assert np.allclose(vertices, expected, atol=1e-6)
 
     def test_trimesh_sees_every_bone_node(self):
@@ -216,4 +218,5 @@ class TestThirdPartyReader:
         ).reshape(-1, 3)
 
         expected = np.asarray(mesh.mesh.position, dtype=np.float32)
+        expected[:, 0] *= -1.0
         assert np.allclose(decoded, expected, atol=1e-6)

@@ -74,7 +74,7 @@ def figure_clips(mesh):
     skeleton = build_scene(mesh).skeleton
     return [
         rotation_clip(
-            skeleton, 4, "z", [(0.0, 0.0), (0.5, 70.0), (1.0, 0.0)], name="wave_left"
+            skeleton, 4, "z", [(0.0, 0.0), (0.5, -70.0), (1.0, 0.0)], name="wave_left"
         ),
         rotation_clip(
             skeleton,
