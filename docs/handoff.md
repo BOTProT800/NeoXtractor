@@ -46,6 +46,38 @@ hace una captura del visor real con las teclas 1, 3, Ctrl+1 y Ctrl+7, para
 ponerla al lado de `modelo.png` y del juego. En Linux sin pantalla, con
 `xvfb-run -a` delante.
 
+## Duda abierta: ¿la exportación actual está en espejo?
+
+**El 30 de septiembre un modelo real contradijo la corrección del 27.** El
+usuario subió `test01.glb` / `test02.gltf`, un personaje jugable con esqueleto
+Biped de 47 huesos (`biped_l_hand`, `biped_r_toe0`…), exportado con el código
+actual (sin espejo). Sus propios datos dicen que sale **en espejo**:
+
+- Mira hacia **+Z**: los dedos (`biped_l_toe0`, z=1.24) van por delante del
+  tobillo (`biped_l_foot`, z=−0.12), y la cámara en tercera persona
+  (`cam_tpp`) está detrás, en z=−22.
+- Los huesos `biped_l_*` están en **−X** y los `biped_r_*` en +X. En un visor
+  diestro, alguien que mira hacia +Z tiene la izquierda en +X
+  (izquierda = arriba × delante). Concordancia medida: **−0.97** (+1 sería como
+  se modeló; la figura sintética da +1).
+- El arma va en la mano derecha (`gun_ref` e `ik_weapon` están en
+  `biped_r_wp`), y en el GLB esa mano queda en el lado izquierdo del personaje.
+
+Es decir: según el esqueleto, **el espejo en X que se quitó era correcto**, y
+el visor, el IQE y el PMX, que se corrigieron para coincidir con el GLB,
+coinciden ahora con una imagen especular. La otra evidencia es la observación
+del usuario con `tiejiayong_03` (un NPC sin huesos izquierda/derecha) contra el
+juego. Las dos no pueden ser ciertas a la vez, salvo que los NPC y los
+personajes jugables difieran.
+
+**No se ha cambiado nada todavía.** Lo que lo decide: con este personaje en el
+juego, ¿en qué mano lleva el arma?, y volver a mirar qué detalle de
+`tiejiayong_03` se comparó. Si se confirma el espejo: volver a reflejar X en
+el GLB (`NEOX_TO_GLTF = MIRROR_X`), en el visor y en el IQE, y devolver el PMX
+a como estaba, sin conversión (MMD es zurdo, y NeoX también lo sería). Las
+pruebas de lateralidad pasarían a fijar el otro sentido. Y convertir esta
+medida en una comprobación automática para todo rig con huesos L/R.
+
 ## Dónde está todo
 
 | | |
@@ -53,7 +85,7 @@ ponerla al lado de `modelo.png` y del juego. En Linux sin pantalla, con
 | Rama | `feat/glb-export` sobre `main` (`438da76`) |
 | Remoto | `https://github.com/BOTProT800/NeoXtractor` — la rama está subida, `main` intacto |
 | PR | sin abrir: `https://github.com/BOTProT800/NeoXtractor/pull/new/feat/glb-export` |
-| Pruebas | 216 con todo (Blender, validador, mmd_tools y visor con pantalla); 206 + 10 saltadas solo con el validador (así correrá CI); 194 + 22 saltadas sin nada |
+| Pruebas | 218 con todo (Blender, validador, mmd_tools y visor con pantalla); 208 + 10 saltadas solo con el validador (así correrá CI); 196 + 22 saltadas sin nada |
 
 ## Entorno que hace falta reconstruir
 
@@ -288,8 +320,13 @@ revisarlo en el primer push tras fusionar.
 ## Cómo exportar
 
 Interfaz: abrir el NPK, abrir la malla en el visor, **Save As → glTF 2.0 Binary
-(GLB) Format with animations (.gis)...**. Busca los `.gis` de la misma carpeta
-del NPK abierto y los ofrece con filtro y selección múltiple.
+(GLB) Format with animations (.gis)...**. Las demás entradas de «Save As»
+(GLB, glTF…) **nunca** incluyen animaciones. Ofrece todos los `.gis` del NPK
+abierto, con filtro y selección múltiple: primero, y ya seleccionados, los de
+la carpeta de la malla (NPC); después, la biblioteca compartida de los
+personajes jugables (`common/dongzuoku_gis/`, `<personaje>/common_gis/`).
+Hasta el 30 de septiembre solo ofrecía la carpeta de la malla, así que un
+personaje jugable no tenía nada que elegir.
 
 Consola:
 

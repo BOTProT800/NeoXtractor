@@ -85,6 +85,8 @@ De paso se vio que la tecla 7 del visor («top») mira desde abajo; no tiene que
 
 `MIRROR_X` se conserva como conversión disponible, porque es una convención real del visor y del exportador IQE, y sigue probada: espejar a propósito debe dejar un archivo coherente consigo mismo.
 
+**Contradicción del 30 de septiembre de 2026, sin resolver.** Un personaje jugable real con esqueleto Biped (`test01.glb`, exportado sin espejo) sale en espejo según sus propios huesos: mira hacia +Z (dedos por delante del tobillo, cámara en tercera persona detrás) y sus huesos `biped_l_*` están en −X, en su lado derecho; el arma, colgada de `biped_r_wp`, queda en su mano izquierda. Es la medida desde los datos que se proponía más arriba («huesos con nombres izquierda/derecha frente a la dirección hacia la que mira el personaje»), y da −0.97 donde lo modelado daría +1. Apunta a que NeoX es zurdo y a que el espejo en X original era correcto, en contra de la observación con `tiejiayong_03`. No se ha cambiado el código: falta confirmarlo en el juego con este personaje (la mano del arma). El detalle está en `docs/handoff.md`.
+
 La conversión, sea cual sea, se aplica de forma coherente:
 
 - posiciones mediante `C`,
