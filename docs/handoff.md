@@ -1,6 +1,6 @@
 # Handoff — exportación GLB con esqueleto y animaciones
 
-Punto de continuación al 28 de septiembre de 2026. El plan completo, con el
+Punto de continuación al 30 de septiembre de 2026. El plan completo, con el
 razonamiento y las pruebas de cada decisión, está en
 [plan-exportacion-glb.md](plan-exportacion-glb.md). Este documento es el resumen
 operativo para retomar el trabajo en una sesión nueva.
@@ -30,11 +30,13 @@ Necesita `NEOX_BLENDER_PYTHON` y `NEOX_GLTF_VALIDATOR` (ver abajo). La imagen
 no dice si coincide con el juego: eso hay que compararlo a ojo con algo
 asimétrico (la mano del arma, un logotipo, el peinado).
 
-**Aplicar esta regla ya encontró cuatro cosas**, todas corregidas el 28 de
-septiembre. La justificación escrita de que NeoX no necesita espejo era falsa
-(ver «Decisiones»). Y el visor de la propia aplicación, el exportador IQE y el
-PMX mostraban la imagen especular del juego; se vio en una captura del visor
-real y al importar el PMX con mmd_tools (ver «Lateralidad por formato»).
+**Aplicar esta regla también enseñó que mirar no basta si se mira mal.** El 27
+de septiembre se quitó el espejo en X porque un NPC parecía al revés frente al
+juego; el 28 se ajustaron el visor, el IQE y el PMX a esa decisión. El 30, un
+personaje jugable con huesos izquierda/derecha demostró desde sus propios
+datos que la decisión era la contraria, y se deshizo todo (ver «Lateralidad:
+NeoX es zurdo»). La comprobación con nombres de huesos no depende ni de la
+memoria ni de la vista, y ahora corre en cada exportación.
 
 Para el visor de la aplicación:
 
@@ -46,37 +48,42 @@ hace una captura del visor real con las teclas 1, 3, Ctrl+1 y Ctrl+7, para
 ponerla al lado de `modelo.png` y del juego. En Linux sin pantalla, con
 `xvfb-run -a` delante.
 
-## Duda abierta: ¿la exportación actual está en espejo?
+## Lateralidad: NeoX es zurdo
 
-**El 30 de septiembre un modelo real contradijo la corrección del 27.** El
-usuario subió `test01.glb` / `test02.gltf`, un personaje jugable con esqueleto
-Biped de 47 huesos (`biped_l_hand`, `biped_r_toe0`…), exportado con el código
-actual (sin espejo). Sus propios datos dicen que sale **en espejo**:
+**Resuelto el 30 de septiembre, sin el juego** (sus servidores ya cerraron).
+El usuario subió `test01.glb`, un personaje jugable con esqueleto Biped de 47
+huesos, exportado sin espejo. Sus propios datos dicen que así salía **en
+espejo**:
 
 - Mira hacia **+Z**: los dedos (`biped_l_toe0`, z=1.24) van por delante del
   tobillo (`biped_l_foot`, z=−0.12), y la cámara en tercera persona
-  (`cam_tpp`) está detrás, en z=−22.
-- Los huesos `biped_l_*` están en **−X** y los `biped_r_*` en +X. En un visor
-  diestro, alguien que mira hacia +Z tiene la izquierda en +X
-  (izquierda = arriba × delante). Concordancia medida: **−0.97** (+1 sería como
-  se modeló; la figura sintética da +1).
-- El arma va en la mano derecha (`gun_ref` e `ik_weapon` están en
-  `biped_r_wp`), y en el GLB esa mano queda en el lado izquierdo del personaje.
+  (`cam_tpp`) cuelga 22 unidades detrás, en −Z.
+- Sus huesos `biped_l_*` están en **−X**. Mirando hacia +Z con Y arriba, la
+  izquierda está en −X en una base zurda y en +X en una diestra. Leído como
+  diestro, lo que el rig llama izquierda caía en su derecha: concordancia
+  **−1.00** sobre 13 pares izquierda/derecha.
+- Su arma cuelga de `biped_r_wp`, la mano derecha, que sin espejo caía en su
+  lado izquierdo.
+- Las herramientas de la comunidad coinciden: `zhouhang95/neox_tools` refleja
+  X para OBJ e IQE y solo gira 180° para PMX (zurdo como NeoX), y su versión
+  para Identity V asigna `bip001_l_*` a los huesos «左» de MMD con ese mismo
+  giro, lo que solo cae en la izquierda si NeoX es zurdo. El visor y el IQE de
+  este proyecto reflejaban X desde el principio.
 
-Es decir: según el esqueleto, **el espejo en X que se quitó era correcto**, y
-el visor, el IQE y el PMX, que se corrigieron para coincidir con el GLB,
-coinciden ahora con una imagen especular. La otra evidencia es la observación
-del usuario con `tiejiayong_03` (un NPC sin huesos izquierda/derecha) contra el
-juego. Las dos no pueden ser ciertas a la vez, salvo que los NPC y los
-personajes jugables difieran.
+Contra eso solo estaba la observación de `tiejiayong_03` (un NPC sin huesos
+izquierda/derecha) del 27; todo lo demás la contradice.
 
-**No se ha cambiado nada todavía.** Lo que lo decide: con este personaje en el
-juego, ¿en qué mano lleva el arma?, y volver a mirar qué detalle de
-`tiejiayong_03` se comparó. Si se confirma el espejo: volver a reflejar X en
-el GLB (`NEOX_TO_GLTF = MIRROR_X`), en el visor y en el IQE, y devolver el PMX
-a como estaba, sin conversión (MMD es zurdo, y NeoX también lo sería). Las
-pruebas de lateralidad pasarían a fijar el otro sentido. Y convertir esta
-medida en una comprobación automática para todo rig con huesos L/R.
+**Verificado con ese modelo real**, reconstruido desde `test01.glb` (la
+reconstrucción reproduce el archivo del usuario con diferencia 0.0): con el
+código nuevo, visto de frente, su mano izquierda queda a la derecha de quien
+lo mira. El PMX pasado por mmd_tools y el OBJ importado en Blender caen sobre
+el GLB (0.0 y 3·10⁻⁶) con el 100 % de las caras concordando con sus normales.
+
+**Comprobación automática:** `core/mesh_converter/handedness.py`. En cada
+exportación glTF, si el rig tiene huesos izquierda/derecha y dedos de los
+pies, el diagnóstico dice «as modelled» o «mirror image», y lo segundo va al
+log como aviso. `diagnose_mesh.py` lo imprime. Con los huesos `bone_01`… de
+`tiejiayong` no puede decir nada.
 
 ## Dónde está todo
 
@@ -85,7 +92,7 @@ medida en una comprobación automática para todo rig con huesos L/R.
 | Rama | `feat/glb-export` sobre `main` (`438da76`) |
 | Remoto | `https://github.com/BOTProT800/NeoXtractor` — la rama está subida, `main` intacto |
 | PR | sin abrir: `https://github.com/BOTProT800/NeoXtractor/pull/new/feat/glb-export` |
-| Pruebas | 218 con todo (Blender, validador, mmd_tools y visor con pantalla); 208 + 10 saltadas solo con el validador (así correrá CI); 196 + 22 saltadas sin nada |
+| Pruebas | 230 con todo (Blender, validador, mmd_tools y visor con pantalla); 220 + 10 saltadas solo con el validador (así correrá CI); 208 + 22 saltadas sin nada |
 
 ## Entorno que hace falta reconstruir
 
@@ -176,45 +183,39 @@ especificación, skinning en CPU desde los accessors exportados, `pygltflib` y
 
 ## Decisiones que costaron y no hay que rehacer
 
-Cada una se resolvió midiendo, salvo la lateralidad, que se resolvió mirando.
+Cada una se resolvió midiendo. La lateralidad se decidió primero mirando, y
+mal; luego midiendo, con los nombres de huesos.
 
 **Las matrices de hueso son globales en disposición de vector fila.** La
 traslación está en la última fila. Se detecta de los datos comprobando cuál de
 las dos ranuras es la afín `(0,0,0,1)`. Ver `core/mesh_converter/skeleton.py`.
 
-**NeoX no necesita espejo para glTF, y eso lo decide la vista, no una
-medida.** Hasta el 27 de septiembre el exportador reflejaba X, heredado del
-visor. El usuario abrió `tiejiayong_03` en Blender, lo comparó con el juego y
-vio una imagen especular; se quitó el espejo. Esa observación es la única
-evidencia, y es buena porque la referencia fue el juego.
+**NeoX es zurdo: el glTF refleja X** (`NEOX_TO_GLTF = MIRROR_X`). La evidencia
+está arriba, en «Lateralidad: NeoX es zurdo», y en el comentario de
+`NEOX_TO_GLTF`.
 
-La justificación que se escribió entonces era **falsa**: «bobinado frente a
-normales guardadas, producto escalar medio +0.99, 100 % de triángulos a
-favor». Para un espejo `M`, `cross(M a, M b) = det(M) · M · cross(a, b)`, así
-que reflejar posiciones y normales e invertir el bobinado da **exactamente la
-misma** concordancia. Una fuente zurda con caras en sentido horario puntúa
-igual. Tampoco sirve «X simétrico respecto a cero»: es precisamente lo único
-que un espejo en X deja igual.
-`TestHandedness::test_winding_agreement_cannot_tell_a_mirror` lo deja fijado
-para que nadie vuelva a citarla como prueba. `--conversion mirror_x` en
-`diagnose_mesh.py` exporta la versión en espejo para compararlas lado a lado.
+Dos medidas que se citaron a favor de lo contrario **no pueden distinguir un
+espejo**: «bobinado frente a normales guardadas, +0.99» (para un espejo `M`,
+`cross(M a, M b) = det(M) · M · cross(a, b)`, así que reflejar e invertir el
+bobinado da la misma concordancia) y «X simétrico respecto a cero» (lo único
+que un espejo en X deja igual).
+`TestHandedness::test_winding_agreement_cannot_tell_a_mirror` lo deja fijado.
+`--conversion identity` en `diagnose_mesh.py` exporta sin espejo para
+comparar.
 
 **Lateralidad por formato.** Todos deben enseñar lo mismo que el juego. La
-convención de cada formato sale de la herramienta de referencia de ese formato,
-no de este proyecto, y donde se pudo se comprobó mirando:
+convención de cada formato sale de su herramienta de referencia, y donde se
+pudo se comprobó con el modelo real:
 
 | Destino | Convención | Qué hace NeoXtractor | Evidencia |
 | --- | --- | --- | --- |
-| GLB/glTF | diestro, Y arriba, caras antihorarias | coordenadas tal cual | vista en Blender contra el juego |
-| Visor de la app | cámara OpenGL diestra | coordenadas tal cual (antes: espejo en X) | captura del visor real junto al render del GLB |
-| IQE | diestro, caras horarias, V invertida | tal cual, triángulos invertidos (antes: espejo en X) | exportador de Blender y compilador de lsalzman/iqm |
-| PMX (MMD) | zurdo, Y arriba | espejo en Z y triángulos invertidos (antes: tal cual) | importado con mmd_tools y renderizado |
-| OBJ | diestro | tal cual | convención del formato |
-| ASCII | formato de texto propio | tal cual | sin consumidor externo que consultar |
-| SMD | diestro, **Z arriba** | tal cual | sin espejo; puede salir tumbado (sin comprobar) |
-
-En el visor, la tecla 3 cambió de signo para seguir enseñando el mismo lado
-del modelo (+X) que antes del cambio.
+| GLB/glTF | diestro, Y arriba, caras antihorarias | espejo en X, triángulos invertidos | rig Biped real: izquierda en su izquierda |
+| Visor de la app | cámara OpenGL diestra | espejo en X (como siempre tuvo) | mismas posiciones que el GLB; captura del visor real |
+| IQE | diestro, caras horarias, V invertida | espejo en X, triángulos tal cual (quedan horarios) | lsalzman/iqm; igual que neox_tools |
+| PMX (MMD) | zurdo, Y arriba | giro de 180° en Y, sin espejo | mmd_tools lo devuelve idéntico al GLB |
+| OBJ | diestro | espejo en X, triángulos invertidos | importado en Blender, idéntico al GLB |
+| SMD | diestro, **Z arriba** | espejo en X, triángulos invertidos | sin espejo del juego; puede salir tumbado (sin comprobar) |
+| ASCII | formato de texto propio | coordenadas NeoX tal cual | sin consumidor externo |
 
 **Los TRS de RGIS son relativos al padre y los cuaterniones van `(x,y,z,w)`.**
 Contrastado contra el `.mesh`: error de traslación 2.68 leído como local frente
@@ -267,10 +268,10 @@ derivan de los tiempos.
 
 ## Pendientes, en orden de utilidad
 
-**1. Mirar un modelo real en el visor corregido.** El visor, el IQE y el PMX
-se corrigieron con la figura sintética (el usuario lo pidió: «que coincidan»).
-Falta abrir `tiejiayong_03` en el visor de la app y comprobar contra el juego
-que ya no sale en espejo.
+**1. Probar las animaciones de un personaje jugable.** El selector ya ofrece
+la biblioteca compartida del NPK, pero no se ha probado con `male.npk` de
+verdad: falta ver que los clips de `common/dongzuoku_gis/` mueven un rig
+`biped_*` por nombre.
 
 **Encontrado de paso, sin tocar:** la tecla 7 del visor («top») mira el modelo
 **desde abajo** (cámara en −Y) y Ctrl+7 desde arriba, al revés que en Blender.
@@ -282,38 +283,31 @@ así que queda a decisión del usuario.
 con sus 10 clips y `jianzao_dunpai` con sus 22, con `--validate --render`. En
 la nube solo hubo fixtures.
 
-**3. Decidir la lateralidad desde los propios datos.** Una alternativa a
-depender de la vista: en rigs con nombres izquierda/derecha (los personajes
-jugables de `male.npk` probablemente usen el esquema Biped, `Bip01 L Hand`,
-`Bip01 L Toe0`), el lado de los huesos «L» frente a la dirección hacia la que
-apuntan los dedos de los pies decide si el modelo está en espejo sin mirar el
-juego. `tiejiayong` no sirve: sus huesos se llaman `bone_01`…
-
-**4. La variante `0x0100`.** Afecta a 1 de 45 clips muestreados (`walk_f` en
+**3. La variante `0x0100`.** Afecta a 1 de 45 clips muestreados (`walk_f` en
 `jianzao_guanmu.gis`) y detiene la lectura de los 9 restantes de ese archivo.
 Lo que se sabe: tras la tabla de huesos vienen los tiempos compartidos, y luego
 cada hueso trae `u16 contador` + sus propios tiempos antes de la cabecera de
 canales. Al leer esa cabecera posterior hay un **desajuste de 2 bytes** que no
 se resolvió. Esos clips se saltan con su causa en `RGISFile.skipped`.
 
-**5. Otras variantes de `.mesh`.** Solo está verificada con archivo real la
+**4. Otras variantes de `.mesh`.** Solo está verificada con archivo real la
 versión 2 / tipo 1 / kind 1. Un `.mesh` de tipo 5 (índices de 16 bits) o de los
 tipos cuantizados 20-23 confirmaría que la detección automática acierta ahí.
 
-**6. Datos que se descartan.** El parser salta, por malla: 28 B por hueso
+**5. Datos que se descartan.** El parser salta, por malla: 28 B por hueso
 (parecen volúmenes de colisión) y 12 B por vértice (probablemente tangentes,
 útiles para normal maps). Ninguno es animación.
 
-**7. Convención de UV y materiales.** El exportador glTF conserva `v`; el IQE
+**6. Convención de UV y materiales.** El exportador glTF conserva `v`; el IQE
 escribe `1 - v`. Hace falta una textura real para decidir. Exportar materiales
 con textura resolvería además el aviso `UNUSED_OBJECT` del validador y daría
 otra forma de ver el espejo: un texto en la textura se leería al revés.
 
-**8. Submallas.** El parser ignora los bloques adicionales. Si alguna variante
+**7. Submallas.** El parser ignora los bloques adicionales. Si alguna variante
 usa paleta de huesos por bloque, el cambio se concentra en cómo se construye
 `bone_to_slot` en `gltf_scene.py`.
 
-**9. CI.** `.github/workflows/tests.yml` instala ahora Node y el validador. CI
+**8. CI.** `.github/workflows/tests.yml` instala ahora Node y el validador. CI
 solo corre en push a `main`, así que ese paso **no se ha ejecutado nunca**;
 revisarlo en el primer push tras fusionar.
 
@@ -333,7 +327,7 @@ Consola:
 ```
 uv run python tools/diagnose_mesh.py temp/tiejiayong_03.mesh --anim temp/tiejiayong.gis --validate --render idle
 uv run python tools/diagnose_mesh.py modelo.mesh --anim modelo.gis --clips walk_f,idle
-uv run python tools/diagnose_mesh.py modelo.mesh --conversion mirror_x --out modelo_espejo.glb --render
+uv run python tools/diagnose_mesh.py modelo.mesh --conversion identity --out modelo_sin_espejo.glb --render
 ```
 
 El script imprime qué leyó el parser, qué convención detectó y por qué, qué
@@ -353,6 +347,7 @@ uv run python tools/capture_viewer.py modelo.mesh
 ```
 core/anim_loader/rgis.py           lector RGIS, layout en su docstring
 core/mesh_converter/skeleton.py    contrato: disposición, papel, conversión, TRS
+core/mesh_converter/handedness.py  lateralidad desde los nombres izquierda/derecha
 core/mesh_converter/animation.py   modelo de clips y puente desde RGIS
 core/mesh_converter/gltf_scene.py  escena compartida por .gltf y .glb
 core/mesh_converter/formats/glb.py contenedor binario

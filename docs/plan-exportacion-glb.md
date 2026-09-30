@@ -45,7 +45,7 @@ ASCII, PMX y SMD leían la traslación del hueso desde `matrix[0, 3]` o `matrix.
 
 Los tres respetan el centinela derivado de `joint_index_bits` y **no reasignan a la raíz** una influencia inválida: la descartan y lo registran. PMX obliga a que todo vértice referencie un hueso, así que un vértice sin influencia utilizable cae en el primero y se informa cuántos, en lugar de disimularlo.
 
-ASCII y SMD conservan su geometría sin convertir, así que el esqueleto se resuelve con `IDENTITY_CONVERSION` para que malla y huesos sigan en el mismo espacio. El PMX refleja Z desde el 28 de septiembre de 2026, porque MMD es zurdo (ver «Conversión de coordenadas»), y malla, normales y huesos pasan por esa misma conversión.
+El ASCII conserva su geometría sin convertir, así que su esqueleto se resuelve con `IDENTITY_CONVERSION` para que malla y huesos sigan en el mismo espacio. El SMD refleja X y el PMX gira 180° (ver «Conversión de coordenadas»); en los dos, malla, normales y huesos pasan por la misma conversión.
 
 **Hipótesis contrastadas sobre la convención de matrices.**
 
@@ -62,30 +62,24 @@ Transponer una matriz para cambiar su interpretación (`to_contract_matrix`) y s
 
 **Conversión de coordenadas.**
 
-**NeoX no necesita ninguna, y eso lo decidió una mirada, no una medida.** Hasta el 27 de septiembre de 2026 el exportador reflejaba X, heredado del visor y del exportador IQE sin comprobarlo. El usuario abrió `tiejiayong_03` en Blender y vio una **imagen especular**; como el exportador además invertía el bobinado para compensar, el sombreado salía correcto y el fallo solo se notaba en un detalle asimétrico. Se quitó el espejo y `NEOX_TO_GLTF` es la identidad.
+**NeoX es zurdo: el glTF refleja X.** Decidido el 30 de septiembre de 2026 con datos, después de dos cambios de rumbo que conviene no repetir.
 
-**La justificación que se escribió entonces era falsa**, y se corrigió el 28 de septiembre:
+1. Hasta el 27 de septiembre el exportador reflejaba X, heredado del visor y del exportador IQE. Era correcto, pero nadie lo había comprobado.
+2. El 27 se quitó, porque `tiejiayong_03` (un NPC sin huesos izquierda/derecha) pareció al revés frente al juego al abrirlo en Blender. Se citaron dos medidas como prueba, y **ninguna puede distinguir un espejo**: el bobinado frente a las normales guardadas (+0.99) solo demuestra coherencia interna, porque para un espejo `M`, `cross(M a, M b) = det(M) · M · cross(a, b)` y reflejar e invertir el bobinado puntúa igual; y un contorno simétrico en X es lo único que un espejo en X deja igual. El 28 se ajustaron el visor, el IQE y el PMX a esa decisión, «para que coincidan».
+3. El 30, un personaje jugable real (`test01.glb`, 47 huesos Biped, exportado sin espejo) lo contradijo desde sus propios datos. Mira hacia +Z (los dedos van por delante del tobillo y la cámara en tercera persona, `cam_tpp`, cuelga 22 unidades detrás), y sus huesos `biped_l_*` están en −X. Mirando hacia +Z con Y arriba, la izquierda está en −X en una base zurda y en +X en una diestra, así que leído como diestro lo que el rig llama izquierda caía en su derecha: concordancia −1.00 sobre 13 pares. Su arma cuelga de la mano derecha (`biped_r_wp`), que caía en su izquierda. Las herramientas de la comunidad dicen lo mismo: `zhouhang95/neox_tools` refleja X para OBJ e IQE y solo gira 180° para PMX, y su versión para Identity V asigna `bip001_l_*` a los huesos «左» de MMD con ese giro, lo que solo cae a la izquierda si NeoX es zurdo. El juego ya no se puede consultar (sus servidores cerraron), pero esta comprobación no lo necesita.
 
-- **Bobinado frente a normales guardadas** (producto escalar medio `+0.99`, el 100 % de los triángulos positivo en `tiejiayong_03` y `jianzao_dunpai`). Demuestra que el archivo es coherente consigo mismo, nada más. Para un espejo `M`, `cross(M a, M b) = det(M) · M · cross(a, b)`: reflejar posiciones y normales invierte la normal geométrica frente a la guardada, e invertir el bobinado la vuelve a poner. La exportación con espejo y sin él puntúan **exactamente igual** (`+1.000` las dos sobre una «L» sintética), y una fuente zurda con caras en sentido horario también daría `+0.99`.
-- **Eje vertical** (`jianzao_dunpai` va de Y=0.05 a Y=20.06 con X simétrico respecto a cero). Decide que Y es arriba; no dice nada del espejo en X, porque un contorno simétrico en X es justo lo que un espejo en X deja igual.
+Se restauró el espejo y se verificó con ese modelo, reconstruido desde el `test01.glb` del usuario (reproducción exacta): visto de frente, su mano izquierda queda a la derecha de quien lo mira, y el PMX por mmd_tools y el OBJ por Blender caen sobre el GLB con el 100 % de las caras concordando con sus normales.
 
-La regresión que se presentó como la que «lo habría detectado» sí falla con el código antiguo, pero no por medir la lateralidad: la aserción de bobinado frente a normales pasaba igual con el espejo, y la que falla solo exige que las posiciones salgan iguales a las de origen, es decir, repite la decisión. `tests/test_gltf_scene.py::TestHandedness` dice ahora lo que puede y no puede fijar, y `test_winding_agreement_cannot_tell_a_mirror` deja constancia de que esa medida es ciega al espejo.
+`core/mesh_converter/handedness.py` repite la comprobación en cada exportación glTF de un rig con huesos izquierda/derecha y dedos, y avisa en el log si sale «mirror image». `tests/test_handedness.py` la prueba con un rig dispuesto como el real, y `TestHandedness::test_winding_agreement_cannot_tell_a_mirror` deja constancia de por qué la medida del 27 no servía.
 
-Lo que sí decidiría la lateralidad desde los datos, sin depender del juego: un texto en una textura, o huesos con nombres izquierda/derecha frente a la dirección hacia la que mira el personaje. Mientras no se haga, la evidencia es la observación en Blender, comparada con el propio juego (Cyber Hunter), según confirmó el usuario el 28 de septiembre de 2026.
+**Lateralidad de cada destino**, tomada de la herramienta de referencia de cada formato:
 
-**El visor de NeoXtractor, el exportador IQE y el PMX también salían en espejo**, y se corrigieron el 28 de septiembre de 2026 a petición del usuario («que coincidan»). Cada caso se vio, no se dedujo:
+- **glTF/GLB, visor, OBJ, SMD** (diestros): espejo en X y triángulos invertidos (el visor, cambiando dos esquinas de cada triángulo). El SMD además tiene Z arriba y sigue escribiéndose con Y arriba, sin comprobar cómo queda.
+- **IQE** (diestro con caras horarias, según lsalzman/iqm: su exportador de Blender invierte cada triángulo, «Quake winding is reversed»): espejo en X y triángulos tal cual, porque el espejo ya los deja horarios. Es lo que hacía siempre.
+- **PMX** (MMD, zurdo como NeoX, según mmd_tools, que lo importa con `.xzy`): giro de 180° en Y, sin espejo, para que el modelo mire a la cámara de MMD, como neox_tools. Por mmd_tools vuelve idéntico al GLB.
+- **ASCII**: formato de texto propio, coordenadas NeoX tal cual.
 
-- **Visor.** Negaba X con una cámara OpenGL corriente. `tools/capture_viewer.py` hizo una captura del visor real (bajo Xvfb) con la figura de prueba: visto desde +Z, el bastón de la mano izquierda salía a la izquierda, y en el render del GLB a la derecha. Sin el espejo, las cuatro vistas coinciden con las de `tools/render_glb.py`. La tecla 3 cambió de signo para seguir enseñando el mismo lado del modelo (+X). `tests/test_viewer_handedness.py` lo cubre, con una prueba que abre el visor real si hay pantalla (`NEOX_VIEWER_TESTS=1`).
-- **IQE.** Negaba X. La convención del formato está en las herramientas de su autor (lsalzman/iqm): el exportador de Blender escribe las coordenadas diestras de Blender sin tocar e invierte cada triángulo («Quake winding is reversed»), y el compilador carga un OBJ rotándolo a Z arriba con `.zxy()` —no un espejo—, invirtiendo triángulos y V. El IQE antiguo ya tenía las caras horarias en su espacio espejado; ahora se escribe sin espejo y con los triángulos invertidos. No hay importador IQE para Blender con el que mirarlo, así que aquí la evidencia es esa referencia. `tests/test_iqe_export.py`.
-- **PMX.** Se escribía sin convertir, pero MMD es zurdo: mmd_tools, el lector de referencia, lo importa con `.xzy` (un espejo) e invirtiendo caras. Importado con mmd_tools y renderizado, el PMX antiguo mostraba la figura mirando a −Z con el bastón aún en +X, es decir, en la mano derecha. Ahora se refleja Z (así la figura mira además a la cámara por defecto de MMD) y se invierten los triángulos; por mmd_tools vuelve idéntica al GLB. `TestPmxHandedness`, con una prueba que hace ese viaje de verdad si hay Blender y mmd_tools.
-
-El OBJ, el ASCII (un formato de texto propio, sin consumidor externo) y el SMD escriben las coordenadas tal cual, como el GLB, así que no tienen espejo. El SMD es un formato con Z arriba y podría salir tumbado; no se ha comprobado.
-
-De paso se vio que la tecla 7 del visor («top») mira desde abajo; no tiene que ver con el espejo y queda sin tocar.
-
-`MIRROR_X` se conserva como conversión disponible, porque es una convención real del visor y del exportador IQE, y sigue probada: espejar a propósito debe dejar un archivo coherente consigo mismo.
-
-**Contradicción del 30 de septiembre de 2026, sin resolver.** Un personaje jugable real con esqueleto Biped (`test01.glb`, exportado sin espejo) sale en espejo según sus propios huesos: mira hacia +Z (dedos por delante del tobillo, cámara en tercera persona detrás) y sus huesos `biped_l_*` están en −X, en su lado derecho; el arma, colgada de `biped_r_wp`, queda en su mano izquierda. Es la medida desde los datos que se proponía más arriba («huesos con nombres izquierda/derecha frente a la dirección hacia la que mira el personaje»), y da −0.97 donde lo modelado daría +1. Apunta a que NeoX es zurdo y a que el espejo en X original era correcto, en contra de la observación con `tiejiayong_03`. No se ha cambiado el código: falta confirmarlo en el juego con este personaje (la mano del arma). El detalle está en `docs/handoff.md`.
+`tools/capture_viewer.py` hace una captura del visor real de la aplicación (bajo Xvfb en Linux) para ponerla junto al render del GLB, y `tests/test_viewer_handedness.py` lo comprueba con píxeles si hay pantalla (`NEOX_VIEWER_TESTS=1`). De paso se vio que la tecla 7 del visor («top») mira desde abajo; no tiene que ver con el espejo y queda sin tocar.
 
 La conversión, sea cual sea, se aplica de forma coherente:
 
@@ -133,7 +127,7 @@ Se rechaza la exportación, en lugar de disimularla: peso positivo sobre un cent
 
 **Comprobaciones ejecutadas.**
 
-Suite de regresión en `tests/`: 153 pruebas cuando se escribió esta sección, **216 al 28 de septiembre de 2026** con todo disponible (Blender, validador de Khronos, mmd_tools y visor con pantalla); 194 y 22 saltadas sin nada, y 206 y 10 saltadas solo con el validador, que es como correrá CI:
+Suite de regresión en `tests/`: 153 pruebas cuando se escribió esta sección, **230 al 30 de septiembre de 2026** con todo disponible (Blender, validador de Khronos, mmd_tools y visor con pantalla); 208 y 22 saltadas sin nada, y 220 y 10 saltadas solo con el validador, que es como correrá CI:
 
 ```
 tests/support/synthetic.py        fixtures: blobs .mesh byte a byte y MeshData
@@ -159,6 +153,7 @@ tools/render_glb.py               hoja de vistas de un .glb, para mirarlo
 tools/capture_viewer.py           captura del visor de la aplicación
 tests/test_viewer_handedness.py    6 pruebas del visor, una con el visor real
 tests/test_iqe_export.py           3 pruebas del IQE contra la convención de lsalzman/iqm
+tests/test_handedness.py          11 pruebas de la lateralidad por nombres de hueso
 tests/support/mmd_roundtrip.py    PMX -> mmd_tools -> GLB
 ```
 
@@ -298,7 +293,7 @@ uv run python tools/diagnose_mesh.py modelo.mesh --anim modelo.gis --render walk
 
 `tools/render_glb.py` importa el archivo con el importador glTF de Blender y escribe una hoja con: el modelo sólido visto desde +Z (el frente glTF), +X, −Z y +Y; las mismas vistas con la malla atenuada y el esqueleto por delante; y, con `--clip`, cinco fotogramas del clip en vista de tres cuartos con la cámara fija. Cada vista lleva los ejes glTF rotulados (rojo +X, verde +Y, azul +Z) y la cámara es ortográfica. Un bobinado que contradiga las normales del archivo sale **negro**: Blender da la vuelta a la normal de una cara vista por detrás, así que todo lo visible queda iluminado del lado equivocado. Pasa con el descarte de caras traseras activado o no, y un modelo con bobinado *y* normales invertidos a la vez sigue viéndose sano, al menos en cajas vistas de frente. Las dos cosas se comprobaron renderizando la figura; la primera versión de este texto atribuía el negro al descarte de caras traseras y decía que el modelo se vería «hueco», y fue mirarlo lo que lo corrigió.
 
-`tests/test_blender_import.py::test_the_render_shows_each_side_where_its_caption_says` comprueba la herramienta leyendo los píxeles: cada eje cae en el lado que dice su rótulo, y el bastón de `box_figure` —un fixture con nariz, dedos de los pies y un bastón solo en la mano izquierda— aparece a la derecha visto desde +Z y a la izquierda desde −Z. Exportada en espejo, esa prueba falla. Lo que no puede comprobar, y la hoja tampoco, es si el modelo coincide con el juego: una exportación en espejo se ve perfectamente sana hasta que se pone al lado del original.
+`tests/test_blender_import.py::test_the_render_shows_each_side_where_its_caption_says` comprueba la herramienta leyendo los píxeles: cada eje cae en el lado que dice su rótulo, y el bastón de `box_figure` —un fixture con nariz, dedos de los pies y un bastón solo en la mano izquierda— aparece a la derecha visto desde +Z y a la izquierda desde −Z. Exportada sin el espejo que NeoX necesita, esa prueba falla. Lo que no puede comprobar, y la hoja tampoco, es si el modelo coincide con el juego: una exportación en espejo se ve perfectamente sana hasta que se pone al lado del original, o hasta que un rig con huesos izquierda/derecha lo delata (`core/mesh_converter/handedness.py`).
 
 **Criterio matemático de implementación.**
 
