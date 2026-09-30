@@ -48,7 +48,7 @@ from core.mesh_converter.animation import (
     make_quaternions_continuous,
     normalize_quaternions,
 )
-from core.mesh_loader import MeshData
+from core.mesh_converter.handedness import check_skeleton
 from core.mesh_converter.skeleton import (
     NEOX_TO_GLTF,
     CoordinateConversion,
@@ -58,6 +58,7 @@ from core.mesh_converter.skeleton import (
     SkeletonError,
     build_skeleton,
 )
+from core.mesh_loader import MeshData
 
 GENERATOR = "NeoXtractor glTF exporter"
 
@@ -624,6 +625,19 @@ def build_scene(
         except SkeletonError as error:
             raise MeshExportError(f"skeleton cannot be built: {error}") from error
         diagnostics.extend(skeleton.diagnostics)
+
+        # The one check that does not share this code's idea of the data: the
+        # rig's own left/right names against the way it faces.
+        handedness = check_skeleton(skeleton)
+        if handedness is not None:
+            note = handedness.describe()
+            if handedness.verdict == "mirror image":
+                note += (
+                    "; the bones named left land on the character's right, so this "
+                    "export shows the mirror image of the model"
+                )
+                logger.warning("GLTF: %s", note)
+            diagnostics.append(note)
 
         # Nodes are created for every bone first; parents are linked in a
         # second pass. Linking while creating used to drop whole branches
